@@ -234,19 +234,24 @@ type ComponentConfig = {
 /**
  * Minimal structural view of the scheduler used for handle.update() so this
  * module doesn't depend on the reconciler.
+ *
+ * The container type is generic so a renderer host that is not the DOM can
+ * schedule updates against its own container type. It defaults to
+ * `ParentNode` for the DOM reconciler.
  */
-export interface UpdateQueue {
-  enqueue(vnode: object, domParent: ParentNode): void
+export interface UpdateQueue<parent extends object = ParentNode> {
+  enqueue(vnode: object, updateParent: parent): void
 }
 
 /**
  * Runtime handle returned by {@link createComponent}.
  */
-export interface ComponentHandle<C = NoContext> {
+export interface ComponentHandle<C = NoContext, parent extends object = ParentNode> {
   frame: FrameHandle
   render(nextProps: ElementProps): [RemixNode, Array<() => void>]
   remove(): Array<() => void>
-  setScheduleUpdate(queue: UpdateQueue, vnode: object, domParent: ParentNode): void
+  releasePendingTasks(): Array<() => void>
+  setScheduleUpdate(queue: UpdateQueue<parent>, vnode: object, updateParent: parent): void
   getContextValue(): C | undefined
   isRemoved(): boolean
 }
@@ -257,11 +262,16 @@ export interface ComponentHandle<C = NoContext> {
  * @param config Component runtime configuration.
  * @returns Component runtime helpers used by the reconciler.
  */
-export function createComponent<C = NoContext>(config: ComponentConfig): ComponentHandle<C> {
-  return new ComponentRuntime<C>(config)
+export function createComponent<C = NoContext, parent extends object = ParentNode>(
+  config: ComponentConfig,
+): ComponentHandle<C, parent> {
+  return new ComponentRuntime<C, parent>(config)
 }
 
-class ComponentRuntime<C = NoContext> implements ComponentHandle<C> {
+class ComponentRuntime<
+  C = NoContext,
+  parent extends object = ParentNode,
+> implements ComponentHandle<C, parent> {
   frame: FrameHandle
 
   #config: ComponentConfig
@@ -274,16 +284,16 @@ class ComponentRuntime<C = NoContext> implements ComponentHandle<C> {
   #removed = false
   // The schedule target is stored as fields (updated each render) rather than
   // a closure so re-renders don't allocate a new function per component.
-  #updateQueue: UpdateQueue | undefined
+  #updateQueue: UpdateQueue<parent> | undefined
   #updateVNode: object | undefined
-  #updateDomParent: ParentNode | undefined
+  #updateParent: parent | undefined
   #scheduleUpdate = (): void => {
     let queue = this.#updateQueue
     if (!queue) throw new Error('scheduleUpdate not implemented')
     let vnode = this.#updateVNode
-    let domParent = this.#updateDomParent
-    if (!vnode || !domParent) throw new Error('scheduleUpdate target not initialized')
-    queue.enqueue(vnode, domParent)
+    let updateParent = this.#updateParent
+    if (!vnode || !updateParent) throw new Error('scheduleUpdate target not initialized')
+    queue.enqueue(vnode, updateParent)
   }
   #tasks: Task[] = []
 
@@ -329,10 +339,20 @@ class ComponentRuntime<C = NoContext> implements ComponentHandle<C> {
     return this.#dequeueTasks((sharedAbortedSignal ??= AbortSignal.abort()))
   }
 
-  setScheduleUpdate = (queue: UpdateQueue, vnode: object, domParent: ParentNode): void => {
+  // Settles work that was waiting on a render which will not happen, so an
+  // awaited handle.update() cannot hang when the render is abandoned. The
+  // component stays mounted; only the abandoned render's lifetime ends.
+  releasePendingTasks = (): Array<() => void> => {
+    if (this.#removed) return EMPTY_TASKS
+    this.#abortRenderSignal()
+    if (this.#tasks.length === 0) return EMPTY_TASKS
+    return this.#dequeueTasks((sharedAbortedSignal ??= AbortSignal.abort()))
+  }
+
+  setScheduleUpdate = (queue: UpdateQueue<parent>, vnode: object, updateParent: parent): void => {
     this.#updateQueue = queue
     this.#updateVNode = vnode
-    this.#updateDomParent = domParent
+    this.#updateParent = updateParent
   }
 
   getContextValue = (): C | undefined => this.#contextValue
@@ -382,6 +402,9 @@ class ComponentRuntime<C = NoContext> implements ComponentHandle<C> {
   }
 
   #connectedSignal(): AbortSignal {
+    // A removed component must never hand out a live signal, including when
+    // nothing read handle.signal before the removal aborted it.
+    if (this.#removed) return (sharedAbortedSignal ??= AbortSignal.abort())
     this.#connectedController ??= new AbortController()
     return this.#connectedController.signal
   }

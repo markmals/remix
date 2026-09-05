@@ -107,6 +107,10 @@
       "types": "./src/select/primitives.tsx",
       "default": "./src/select/primitives.tsx"
     },
+    "./renderer": {
+      "types": "./src/renderer.ts",
+      "default": "./src/renderer.ts"
+    },
     "./server": {
       "types": "./src/server/stream.ts",
       "default": "./src/server/stream.ts"
@@ -218,6 +222,10 @@
       "./select/primitives": {
         "types": "./dist/select/primitives.d.ts",
         "default": "./dist/select/primitives.js"
+      },
+      "./renderer": {
+        "types": "./dist/renderer.d.ts",
+        "default": "./dist/renderer.js"
       },
       "./server": {
         "types": "./dist/server/stream.d.ts",

@@ -1,0 +1,3 @@
+Add the experimental `remix/ui/renderer` host-operation API for rendering Remix components outside the DOM. Custom hosts provide node creation, text/prop updates, insertion/removal, traversal, and optional commit and event-target hooks. The renderer reuses Remix's component and mixin lifecycles and shared keyed matching, including context, batched updates, post-commit tasks, and abort-signal cleanup.
+
+The existing DOM renderer remains separate; DOM frames, hydration, navigation, `innerHTML`, and DOM-dependent mixins are not supported by custom roots. Event-target hosts can use the existing `on()` and `createMixin` APIs. `remix/tui` exercises the host API against a real terminal layout and input engine.

@@ -8,9 +8,9 @@ type SignaledListener<event extends Event> = (
   signal: AbortSignal,
 ) => void | Promise<void>
 
-type EventType<target extends Element> = string & keyof EventMap<target>
+type EventType<target extends EventTarget> = string & keyof EventMap<target>
 
-type ListenerFor<target extends Element, type extends EventType<target>> = SignaledListener<
+type ListenerFor<target extends EventTarget, type extends EventType<target>> = SignaledListener<
   EnsureEvent<EventMap<target>[type], target>
 >
 export type OnMixinDescriptor = {
@@ -19,14 +19,14 @@ export type OnMixinDescriptor = {
 }
 
 const onMixinType: MixinType<
-  Element,
+  EventTarget,
   [type: string, handler: SignaledListener<Event>, captureBoolean?: boolean],
   ElementProps
 > = (handle) => {
   let currentHandler: SignaledListener<Event> = () => {}
   let currentType = ''
   let currentCapture = false
-  let currentNode: Element | null = null
+  let currentNode: EventTarget | null = null
   let reentry: AbortController | null = null
 
   let stableHandler = (event: Event) => {
@@ -72,15 +72,19 @@ export function isOnMixinDescriptor(descriptor: unknown): descriptor is OnMixinD
 }
 
 /**
- * Attaches a typed DOM event handler through the mixin system.
+ * Attaches a typed event handler through the mixin system.
+ *
+ * The target is any `EventTarget`, so the same mixin binds DOM elements and
+ * the event targets a renderer host exposes. Event names and payloads come
+ * from the target's event map.
  *
  * @param type Event type to listen for.
  * @param handler Event handler.
  * @param captureBoolean Whether to listen during capture.
- * @returns A mixin descriptor for the target element.
+ * @returns A mixin descriptor for the target.
  */
 export function on<
-  target extends Element = Element,
+  target extends EventTarget = Element,
   type extends EventType<target> = EventType<target>,
 >(
   type: type,

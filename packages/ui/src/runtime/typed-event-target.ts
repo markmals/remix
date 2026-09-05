@@ -8,6 +8,16 @@ export class TypedEventTarget<eventMap> extends EventTarget {}
  */
 export interface TypedEventTarget<eventMap> {
   /**
+   * Type-only marker carrying the target's event map.
+   *
+   * Never assigned at runtime. It exists so `on(...)` and other typed helpers
+   * can recover `eventMap` from a target type: the listener overloads below
+   * cannot be inferred from, because the untyped fallback overload wins
+   * signature inference.
+   */
+  readonly __rmxEvents?: eventMap
+
+  /**
    * Adds a listener for a typed event name from the event map.
    *
    * @param type Event name to listen for.

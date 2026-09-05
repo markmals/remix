@@ -9,6 +9,7 @@ Runtime UI primitives for Remix apps, including the component runtime, server re
 - `mix` composition with event, ref, CSS, and animation helpers
 - Headless behavior primitives for controls such as menus, listboxes, popovers, selects, and comboboxes
 - Lower-level utilities for keyboard events, typeahead search, refs, attributes, and CSS transition timing
+- Experimental host-operation API for custom non-DOM renderers
 
 ## Installation
 
@@ -78,6 +79,48 @@ function Actions() {
   return () => <button mix={button({ tone: 'primary' })}>Create project</button>
 }
 ```
+
+## Custom Renderers
+
+`remix/ui/renderer` exposes an experimental `createRenderer(host)` API. Its small, Vue-style host interface lets Remix own component setup, stable props, context, mixin composition, keyed identity, batched updates, and lifetime cleanup while the host owns its node tree.
+
+Given a host implementation and its container:
+
+```tsx
+import { createRenderer } from 'remix/ui/renderer'
+
+let renderer = createRenderer(host)
+let root = renderer.createRoot(container)
+root.render(<App />)
+root.flush()
+root.unmount()
+```
+
+Implement these operations on `RendererHost<node, element>`:
+
+| Operation                                  | Contract                                                                                                |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `createElement(type, props)`               | Create a host element and apply its initial props; ignore `children` and do not retain the props object |
+| `createText(text)`, `setText(node, text)`  | Create and update host text                                                                             |
+| `createComment(text)`                      | Create an invisible, insertable replacement anchor                                                      |
+| `patchProp(element, name, previous, next)` | Apply changed or removed props after mount; `undefined` removes a prop                                  |
+| `insert(node, parent, before)`             | Insert or move a node; `null` appends                                                                   |
+| `remove(node)`                             | Detach a subtree; descendants are cleaned up without separate host removals                             |
+| `parentNode(node)`, `nextSibling(node)`    | Traverse the host tree                                                                                  |
+| `getEventTarget(element)` (optional)       | Expose an `EventTarget` for the shared mixin lifecycle; required on elements using `mix`                |
+| `commit(container)` (optional)             | Paint once per batch, after mutations and before component tasks                                        |
+
+Roots append to their container and remove only their own nodes. `handle.update()` schedules a component update; `flush()` drains pending work immediately. Component tasks run after the host commit, and unmounting aborts component signals and settles pending updates.
+
+Custom hosts use the normal `mix` prop and `createMixin` API. Mixins compose props in order and share context, updates, tasks, and abort-signal cleanup with DOM mixins. `on()` works with a host's event target; `remix/tui` provides `style()` for terminal appearance and layout. Host props are resolved before creation and patching, and `mix` itself is not forwarded to the host.
+
+Reconciliation failures from `render()` throw synchronously. Scheduled update, queued-task, and commit failures emit a cancelable `error` event; call `preventDefault()` when handling `event.error`, or the error is rethrown asynchronously.
+
+Reconciliation is not transactional: host mutations made before a failure are not rolled back. Unmount and recreate a failed root when a clean recovery is required.
+
+The [TUI renderer](https://github.com/remix-run/remix/tree/main/packages/tui) implements this interface using `@bomb.sh/tty`. Its [host operations](https://github.com/remix-run/remix/blob/main/packages/tui/src/lib/host.ts) and [interactive demo](https://github.com/remix-run/remix/tree/main/demos/tui) provide a working non-DOM example.
+
+This is an API-first experiment. The existing DOM renderer has **not** been migrated to this interface; it shares component and mixin lifecycles and extracted keyed matching, not the entire reconciler. Custom roots reject `innerHTML` and `Frame`. Mixins that depend on DOM nodes or browser frame/style infrastructure, including `css()`, remain DOM-only. Browser hydration, navigation, retained-node animations, and DOM-specific controls remain features of the DOM runtime.
 
 ## Frame Navigation
 

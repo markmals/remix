@@ -35,6 +35,13 @@ import {
 } from './vnode.ts'
 import { invariant } from './invariant.ts'
 import { patchHostProps } from './core/props.ts'
+import {
+  analyzeKeyedChildMatches,
+  hasKeyedChildren,
+  lisMatches,
+  matchKeyedChildren,
+  warnDuplicateKeys,
+} from './core/keyed-children.ts'
 import type { StyleManager } from '../style/index.ts'
 import type { ElementFunction } from './element-function.ts'
 import type { Key } from './key.ts'
@@ -320,8 +327,13 @@ function areOnMixinDescriptors(descriptors: unknown[]): descriptors is OnMixinDe
   return true
 }
 
+// The shared binding type accepts any host scheduler; DOM bindings always carry
+// the DOM scheduler, which reconciliation needs for controlled reflection and
+// prop resolution.
+type DomMixinBinding = MixinRuntimeBinding<CommittedHostNode> & { scheduler: Scheduler }
+
 function enqueueMixinBindingUpdate(
-  this: MixinRuntimeBinding<CommittedHostNode>,
+  this: DomMixinBinding,
   done: (signal: AbortSignal) => void,
 ): void {
   let node = this.target
@@ -349,6 +361,15 @@ function enqueueMixinBindingUpdate(
   ])
 }
 
+// Answers the scheduler's "did this batch re-render my node" question for DOM
+// bindings. Declared once and called with the binding as `this`, so a bound
+// node does not pay for a closure on every render.
+function mixinBindingContainsNode(this: DomMixinBinding, container: unknown): boolean {
+  if (!(container instanceof Node)) return false
+  let node: Node = this.node
+  return container === node || container.contains(node)
+}
+
 function bindNodeMixRuntime(
   node: CommittedHostNode,
   frame: FrameHandle,
@@ -358,19 +379,17 @@ function bindNodeMixRuntime(
   parent?: ParentNode,
 ) {
   let state = node._mixState
-  bindMixinRuntime(
-    state,
-    {
-      node: node._dom,
-      parent: parent ?? getRequiredDomParent(node._dom),
-      key: node.key,
-      target: node,
-      frame,
-      scheduler,
-      enqueueUpdate: enqueueMixinBindingUpdate,
-    },
-    { dispatchReclaimed: reclaimed },
-  )
+  let binding: DomMixinBinding = {
+    node: node._dom,
+    parent: parent ?? getRequiredDomParent(node._dom),
+    key: node.key,
+    target: node,
+    frame,
+    scheduler,
+    enqueueUpdate: enqueueMixinBindingUpdate,
+    contains: mixinBindingContainsNode,
+  }
+  bindMixinRuntime(state, binding, { dispatchReclaimed: reclaimed })
 }
 
 function isHeadHostNode(node: HostNode | CommittedHostNode): boolean {
@@ -1643,41 +1662,6 @@ function canBulkClearNode(node: CommittedVNode): boolean {
   return false
 }
 
-function hasKeyedChildren(children: Array<{ key?: Key }>): boolean {
-  for (let i = 0; i < children.length; i++) {
-    if (children[i].key != null) return true
-  }
-  return false
-}
-
-function warnDuplicateKeys(children: Array<{ key?: Key }>): void {
-  let seenKeys: Set<Key> | undefined
-  let duplicateKeys: Set<Key> | undefined
-
-  for (let node of children) {
-    if (node.key == null) continue
-
-    if (!seenKeys) {
-      seenKeys = new Set([node.key])
-      continue
-    }
-
-    if (seenKeys.has(node.key)) {
-      duplicateKeys ??= new Set()
-      duplicateKeys.add(node.key)
-    } else {
-      seenKeys.add(node.key)
-    }
-  }
-
-  if (duplicateKeys?.size) {
-    let quotedKeys = Array.from(duplicateKeys, (key) => `"${String(key)}"`)
-    console.warn(
-      `Duplicate keys detected in siblings: ${quotedKeys.join(', ')}. Keys should be unique.`,
-    )
-  }
-}
-
 function patchKeyedChildren(
   curr: CommittedVNode[],
   next: VNodeInput[],
@@ -1687,14 +1671,7 @@ function patchKeyedChildren(
   cursor?: HydrationCursor,
   anchor?: Node,
 ): CommittedVNode[] {
-  let matches =
-    matchKeyedChildrenInOrder(curr, next) ??
-    matchKeyedChildrenAfterSingleRemoval(curr, next) ??
-    matchKeyedChildrenAfterPairSwap(curr, next)
-  if (!matches) {
-    warnDuplicateKeys(next)
-    matches = matchKeyedChildren(curr, next)
-  }
+  let matches = matchKeyedChildren(curr, next)
   let committed: Array<VNodeInput | CommittedVNode> = next
 
   let matchAnalysis = analyzeKeyedChildMatches(curr.length, matches)
@@ -1744,226 +1721,6 @@ function patchKeyedChildren(
     placementAnchor = findFirstDomAnchor(nextNode) ?? placementAnchor
   }
   return committedChildren
-}
-
-// Keyed child matches are arrays of old indexes (-1 = no match / new node),
-// parallel to `next`. Plain numbers instead of wrapper objects keep large
-// keyed diffs (1000-row tables) allocation-free.
-function matchKeyedChildren(curr: CommittedVNode[], next: VNodeInput[]): number[] {
-  let oldKeyMap = new Map<Key, number>()
-  let usedOldIndexes = new Set<number>()
-  let unkeyedSearchStart = 0
-
-  for (let index = 0; index < curr.length; index++) {
-    let key = curr[index].key
-    if (key != null) oldKeyMap.set(key, index)
-  }
-
-  let matches: number[] = []
-  for (let nextIndex = 0; nextIndex < next.length; nextIndex++) {
-    let nextNode = next[nextIndex]
-    let oldIndex = -1
-
-    if (nextNode.key != null) {
-      let keyedOldIndex = oldKeyMap.get(nextNode.key)
-      if (keyedOldIndex !== undefined) {
-        let oldNode = curr[keyedOldIndex]
-        if (!usedOldIndexes.has(keyedOldIndex) && oldNode.type === nextNode.type) {
-          oldIndex = keyedOldIndex
-        }
-      }
-    } else {
-      for (let index = unkeyedSearchStart; index < curr.length; index++) {
-        let oldNode = curr[index]
-        if (usedOldIndexes.has(index) || oldNode.key != null || oldNode.type !== nextNode.type) {
-          continue
-        }
-
-        oldIndex = index
-        unkeyedSearchStart = index + 1
-        break
-      }
-    }
-
-    if (oldIndex >= 0) usedOldIndexes.add(oldIndex)
-    matches.push(oldIndex)
-  }
-
-  return matches
-}
-
-function matchKeyedChildrenInOrder(curr: CommittedVNode[], next: VNodeInput[]): number[] | null {
-  let length = Math.min(curr.length, next.length)
-  let matches: number[] = []
-
-  for (let index = 0; index < length; index++) {
-    let nextNode = next[index]
-    if (nextNode.key == null) return null
-
-    let oldNode = curr[index]
-    if (oldNode.key !== nextNode.key || oldNode.type !== nextNode.type) {
-      return null
-    }
-
-    matches.push(index)
-  }
-
-  for (let index = length; index < next.length; index++) {
-    if (next[index].key == null) return null
-    matches.push(-1)
-  }
-
-  return matches
-}
-
-function matchKeyedChildrenAfterSingleRemoval(
-  curr: CommittedVNode[],
-  next: VNodeInput[],
-): number[] | null {
-  if (curr.length !== next.length + 1) return null
-
-  let matches: number[] = []
-  let oldIndex = 0
-  let skippedOldNode = false
-
-  for (let nextIndex = 0; nextIndex < next.length; nextIndex++) {
-    let nextNode = next[nextIndex]
-    if (nextNode.key == null) return null
-
-    let oldNode = curr[oldIndex]
-    if (oldNode.key === nextNode.key && oldNode.type === nextNode.type) {
-      matches.push(oldIndex)
-      oldIndex++
-      continue
-    }
-
-    if (skippedOldNode) return null
-    skippedOldNode = true
-    oldIndex++
-
-    oldNode = curr[oldIndex]
-    if (oldNode.key !== nextNode.key || oldNode.type !== nextNode.type) {
-      return null
-    }
-
-    matches.push(oldIndex)
-    oldIndex++
-  }
-
-  return matches
-}
-
-function matchKeyedChildrenAfterPairSwap(
-  curr: CommittedVNode[],
-  next: VNodeInput[],
-): number[] | null {
-  if (curr.length !== next.length) return null
-
-  let matches: number[] = []
-  let firstMismatch = -1
-  let secondMismatch = -1
-
-  for (let index = 0; index < next.length; index++) {
-    let nextNode = next[index]
-    if (nextNode.key == null) return null
-
-    let oldNode = curr[index]
-    if (oldNode.key === nextNode.key && oldNode.type === nextNode.type) {
-      matches.push(index)
-      continue
-    }
-
-    if (firstMismatch === -1) {
-      firstMismatch = index
-    } else if (secondMismatch === -1) {
-      secondMismatch = index
-    } else {
-      return null
-    }
-    matches.push(-1)
-  }
-
-  if (firstMismatch === -1) return matches
-  if (secondMismatch === -1) return null
-
-  let firstOldNode = curr[firstMismatch]
-  let secondOldNode = curr[secondMismatch]
-  let firstNextNode = next[firstMismatch]
-  let secondNextNode = next[secondMismatch]
-
-  if (
-    firstOldNode.key !== secondNextNode.key ||
-    firstOldNode.type !== secondNextNode.type ||
-    secondOldNode.key !== firstNextNode.key ||
-    secondOldNode.type !== firstNextNode.type
-  ) {
-    return null
-  }
-
-  matches[firstMismatch] = secondMismatch
-  matches[secondMismatch] = firstMismatch
-  return matches
-}
-
-function analyzeKeyedChildMatches(
-  currentLength: number,
-  matches: readonly number[],
-): { hasRemovals: boolean; canSkipPlacement: boolean } {
-  let hasRemovals = matches.length !== currentLength
-  let canSkipPlacement = true
-  let lastOldIndex = -1
-  let sawNewNode = false
-
-  for (let index = 0; index < matches.length; index++) {
-    let oldIndex = matches[index]
-    if (oldIndex < 0) {
-      hasRemovals = true
-      sawNewNode = true
-      continue
-    }
-
-    if (sawNewNode || oldIndex < lastOldIndex) {
-      canSkipPlacement = false
-    }
-    lastOldIndex = oldIndex
-  }
-
-  return { hasRemovals, canSkipPlacement }
-}
-
-function lisMatches(matches: readonly number[]): number[] {
-  let predecessors = Array.from<number>({ length: matches.length })
-  let tails: number[] = []
-
-  for (let index = 0; index < matches.length; index++) {
-    let value = matches[index] + 1
-    if (value === 0) continue
-
-    let low = 0
-    let high = tails.length
-
-    while (low < high) {
-      let middle = (low + high) >> 1
-
-      if (matches[tails[middle]] + 1 < value) {
-        low = middle + 1
-      } else {
-        high = middle
-      }
-    }
-
-    predecessors[index] = low > 0 ? tails[low - 1] : -1
-    tails[low] = index
-  }
-
-  let cursor = tails.at(-1) ?? -1
-
-  for (let index = tails.length - 1; index >= 0; index--) {
-    tails[index] = cursor
-    cursor = predecessors[cursor] ?? -1
-  }
-
-  return tails
 }
 
 function placeVNode(node: CommittedVNode, domParent: ParentNode, anchor: Node | null): void {

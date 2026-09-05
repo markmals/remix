@@ -194,6 +194,22 @@ importers:
         specifier: 'catalog:'
         version: 7.0.2
 
+  demos/tui:
+    dependencies:
+      '@bomb.sh/tty':
+        specifier: 0.9.0
+        version: 0.9.0
+      remix:
+        specifier: workspace:^
+        version: link:../../packages/remix
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.10.4
+      '@typescript/native-preview':
+        specifier: 'catalog:'
+        version: 7.0.0-dev.20260707.2
+
   demos/unpkg:
     dependencies:
       remix:
@@ -1625,6 +1641,9 @@ importers:
       '@remix-run/test':
         specifier: workspace:^
         version: link:../test
+      '@remix-run/tui':
+        specifier: workspace:^
+        version: link:../tui
       '@remix-run/ui':
         specifier: workspace:^
         version: link:../ui
@@ -2030,6 +2049,28 @@ importers:
         specifier: 'catalog:'
         version: 7.0.2
 
+  packages/tui:
+    dependencies:
+      '@bomb.sh/tty':
+        specifier: 0.9.0
+        version: 0.9.0
+      '@remix-run/ui':
+        specifier: workspace:^
+        version: link:../ui
+    devDependencies:
+      '@remix-run/assert':
+        specifier: workspace:^
+        version: link:../assert
+      '@remix-run/test':
+        specifier: workspace:^
+        version: link:../test
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.10.4
+      '@typescript/native-preview':
+        specifier: 'catalog:'
+        version: 7.0.0-dev.20260707.2
+
   packages/ui:
     dependencies:
       '@types/dom-navigation':
@@ -2402,6 +2443,10 @@ packages:
   '@babel/types@7.28.5':
     resolution: {integrity: sha512-qQ5m48eI/MFLQ5PxQj4PFaprjyCTLI37ElWMmNs0K8Lk3dVeOdNpB3ks8jc7yM5CDmVC73eMVk/trk3fgmrUpA==}
     engines: {node: '>=6.9.0'}
+
+  '@bomb.sh/tty@0.9.0':
+    resolution: {integrity: sha512-1fX9lgwdc+kGRQeVEYwv7cJb5i855ysvB/TMCC3/wnnjMiKLZjWew6LLnsAMq4pLzkweivYw+zwYNZRUVhjoBA==}
+    engines: {node: '>= 22'}
 
   '@cloudflare/kv-asset-handler@0.5.0':
     resolution: {integrity: sha512-jxQYkj8dSIzc0cD6cMMNdOc1UVjqSqu8BZdor5s8cGjW2I8BjODt/kWPVdY+u9zj3ms75Q5qaZgnxUad83+eAg==}
@@ -6645,6 +6690,8 @@ snapshots:
     dependencies:
       '@babel/helper-string-parser': 7.27.1
       '@babel/helper-validator-identifier': 7.28.5
+
+  '@bomb.sh/tty@0.9.0': {}
 
   '@cloudflare/kv-asset-handler@0.5.0': {}
 
