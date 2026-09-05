@@ -23,7 +23,7 @@ This customizes HTTP response rendering. To change where Remix components render
 
 The [Custom Renderers](/custom-renderers/) guide builds an in-memory document host for Remix components. It covers tree mutations, keyed moves, event targets, and the boundary between the host and the shared component runtime.
 
-Terminal rendering lives outside this repo. [`@pitlane/tui`](https://github.com/pitlane-tools/pitlane/tree/main/packages/tui) implements the same host interface on top of `@bomb.sh/tty`, and its own guides cover [terminal applications](https://github.com/pitlane-tools/pitlane/blob/main/docs/guides/terminal-applications.md) and [embedding terminal renderers](https://github.com/pitlane-tools/pitlane/blob/main/docs/guides/embedding-terminal-renderers.md).
+Terminal rendering lives outside this repo. [`@pitlane/tui`](https://github.com/pitlane-tools/pitlane/tree/main/packages/tui) implements the same host interface on top of `@bomb.sh/tty`, and its own guides cover [terminal applications](https://pitlane.tools/guides/terminal-applications) and [embedding terminal renderers](https://pitlane.tools/guides/embedding-terminal-renderers).
 
 ## Proxy HTTP requests with Fetch {#fetch-proxying}
 
