@@ -1,6 +1,6 @@
 ---
 title: Advanced Guides
-description: Specialized patterns built from Remix's lower-level UI, proxy, stream, template, storage, and archive APIs.
+description: Specialized patterns built from Remix's lower-level UI, terminal, proxy, stream, template, storage, and archive APIs.
 ---
 
 These guides start after the main app path already works. Each one combines a focused Remix package with Web APIs for a specialized requirement rather than introducing another application architecture.
@@ -16,6 +16,18 @@ Compose context providers, controlled state, bubbling custom events, host mixins
 ## Render custom value types through middleware {#custom-renderers}
 
 Use `renderWith()` to install request-scoped renderers for Remix nodes, `SafeHtml`, JSON, feeds, or email previews. Keep status, headers, frame resolution, and request-specific asset URLs in the renderer rather than in route-local helpers.
+
+This customizes HTTP response rendering. To change where Remix components render instead, implement a host with `remix/ui/renderer`.
+
+## Create a non-DOM renderer
+
+The [Custom Renderers](/custom-renderers/) guide builds an in-memory document host for Remix components. It covers tree mutations, keyed moves, event targets, and the boundary between the host and the shared component runtime.
+
+## Build a terminal application
+
+[Terminal Applications](/terminal-applications/) builds an interactive album list with `Box`, `Text`, `style()`, and `on()`. Use the Node runner when your application owns the terminal.
+
+If you already manage input and output, continue with [Embedding Terminal Renderers](/embedding-terminal-renderers/) for byte handling, resizing, errors, and shutdown without the Node runner.
 
 ## Proxy HTTP requests with Fetch {#fetch-proxying}
 
