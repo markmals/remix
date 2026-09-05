@@ -22,29 +22,15 @@
     "node": ">=24.3.0"
   },
   "exports": {
-    ".": "./src/index.ts",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
     "./package.json": "./package.json",
-    "./load-module": "./src/load-module.ts"
-  },
-  "publishConfig": {
-    "exports": {
-      ".": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      },
-      "./package.json": "./package.json",
-      "./load-module": {
-        "types": "./dist/load-module.d.ts",
-        "default": "./dist/load-module.js"
-      }
+    "./load-module": {
+      "types": "./dist/load-module.d.ts",
+      "default": "./dist/load-module.js"
     }
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "clean": "git clean -fdX",
-    "prepublishOnly": "pnpm run build",
-    "test": "node --disable-warning=ExperimentalWarning --test './src/**/*.test.ts'",
-    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "get-tsconfig": "^4.13.6",

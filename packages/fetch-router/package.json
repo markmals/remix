@@ -20,22 +20,15 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./routes": "./src/routes.ts",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./routes": {
+      "types": "./dist/routes.d.ts",
+      "default": "./dist/routes.js"
+    },
     "./package.json": "./package.json"
-  },
-  "publishConfig": {
-    "exports": {
-      ".": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      },
-      "./routes": {
-        "types": "./dist/routes.d.ts",
-        "default": "./dist/routes.js"
-      },
-      "./package.json": "./package.json"
-    }
   },
   "devDependencies": {
     "@remix-run/assert": "workspace:*",
@@ -44,15 +37,7 @@
     "typescript": "catalog:"
   },
   "dependencies": {
-    "@remix-run/route-pattern": "workspace:^"
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "clean": "git clean -fdX",
-    "prepublishOnly": "pnpm run build",
-    "test": "remix test",
-    "test:bun": "bun x --bun remix test",
-    "typecheck": "tsc --noEmit"
+    "@remix-run/route-pattern": "markmals/remix#preview/ui-universal-renderer&path:packages/route-pattern"
   },
   "keywords": [
     "fetch",

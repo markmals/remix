@@ -1,0 +1,210 @@
+import { TypedEventTarget } from './typed-event-target.js';
+/**
+ * Creates the internal runtime wrapper for a component instance.
+ *
+ * @param config Component runtime configuration.
+ * @returns Component runtime helpers used by the reconciler.
+ */
+export function createComponent(config) {
+    return new ComponentRuntime(config);
+}
+class ComponentRuntime {
+    frame;
+    #config;
+    #connectedController;
+    #contextValue;
+    #handle;
+    #props = {};
+    #renderController;
+    #renderFn;
+    #removed = false;
+    // The schedule target is stored as fields (updated each render) rather than
+    // a closure so re-renders don't allocate a new function per component.
+    #updateQueue;
+    #updateVNode;
+    #updateParent;
+    #scheduleUpdate = () => {
+        let queue = this.#updateQueue;
+        if (!queue)
+            throw new Error('scheduleUpdate not implemented');
+        let vnode = this.#updateVNode;
+        let updateParent = this.#updateParent;
+        if (!vnode || !updateParent)
+            throw new Error('scheduleUpdate target not initialized');
+        queue.enqueue(vnode, updateParent);
+    };
+    #tasks = [];
+    constructor(config) {
+        this.#config = config;
+        this.frame = config.frame;
+        this.#handle = this.#createHandle();
+    }
+    render = (nextProps) => {
+        if (this.#removed) {
+            console.warn('render called after component was removed, potential application memory leak');
+            return [null, []];
+        }
+        this.#abortRenderSignal();
+        syncProps(this.#props, nextProps);
+        let renderFn = this.#renderFn;
+        if (renderFn === undefined) {
+            let initialize = this.#config.type;
+            let result = initialize(this.#handle);
+            if (!isRenderFn(result)) {
+                let name = this.#config.type.name || 'Anonymous';
+                throw new Error(`${name} must return a render function, received ${typeof result}`);
+            }
+            renderFn = result;
+            this.#renderFn = renderFn;
+        }
+        return [renderFn(), this.#dequeueTasks()];
+    };
+    remove = () => {
+        if (this.#removed)
+            return EMPTY_TASKS;
+        this.#removed = true;
+        this.#connectedController?.abort();
+        this.#abortRenderSignal();
+        if (this.#tasks.length === 0)
+            return EMPTY_TASKS;
+        return this.#dequeueTasks((sharedAbortedSignal ??= AbortSignal.abort()));
+    };
+    // Settles work that was waiting on a render which will not happen, so an
+    // awaited handle.update() cannot hang when the render is abandoned. The
+    // component stays mounted; only the abandoned render's lifetime ends.
+    releasePendingTasks = () => {
+        if (this.#removed)
+            return EMPTY_TASKS;
+        this.#abortRenderSignal();
+        if (this.#tasks.length === 0)
+            return EMPTY_TASKS;
+        return this.#dequeueTasks((sharedAbortedSignal ??= AbortSignal.abort()));
+    };
+    setScheduleUpdate = (queue, vnode, updateParent) => {
+        this.#updateQueue = queue;
+        this.#updateVNode = vnode;
+        this.#updateParent = updateParent;
+    };
+    getContextValue = () => this.#contextValue;
+    isRemoved = () => this.#removed;
+    #createHandle() {
+        let component = this;
+        let context = {
+            set: (value) => {
+                this.#contextValue = value;
+            },
+            get: (type) => isElementFunction(type) ? this.#config.getContext(type) : undefined,
+        };
+        return {
+            id: this.#config.id,
+            props: this.#props,
+            update: () => new Promise((resolve) => {
+                if (component.#removed) {
+                    resolve(AbortSignal.abort());
+                    return;
+                }
+                this.#tasks.push((signal) => resolve(signal));
+                this.#scheduleUpdate();
+            }),
+            queueTask: (task) => {
+                this.#tasks.push(task);
+            },
+            frame: this.#config.frame,
+            frames: {
+                get top() {
+                    return component.#config.getTopFrame?.() ?? component.#config.frame;
+                },
+                get(name) {
+                    return component.#config.getFrameByName(name);
+                },
+            },
+            context,
+            get signal() {
+                return component.#config.signal ?? component.#connectedSignal();
+            },
+        };
+    }
+    #connectedSignal() {
+        // A removed component must never hand out a live signal, including when
+        // nothing read handle.signal before the removal aborted it.
+        if (this.#removed)
+            return (sharedAbortedSignal ??= AbortSignal.abort());
+        this.#connectedController ??= new AbortController();
+        return this.#connectedController.signal;
+    }
+    #abortRenderSignal() {
+        this.#renderController?.abort();
+        this.#renderController = undefined;
+    }
+    #dequeueTasks(signal) {
+        if (this.#tasks.length === 0)
+            return EMPTY_TASKS;
+        let needsSignal = signal === undefined && this.#tasks.some((task) => task.length >= 1);
+        if (needsSignal) {
+            this.#renderController ??= new AbortController();
+        }
+        signal ??= this.#renderController?.signal;
+        signal ??= sharedAbortedSignal ??= AbortSignal.abort();
+        let tasks = this.#tasks.splice(0, this.#tasks.length);
+        return tasks.map((task) => () => task(signal));
+    }
+}
+function isRenderFn(value) {
+    return typeof value === 'function';
+}
+function isElementFunction(value) {
+    return typeof value === 'function';
+}
+// Shared empty result and aborted signal so the common no-task removal path
+// (large subtree teardowns dispose many components at once) allocates nothing.
+const EMPTY_TASKS = [];
+let sharedAbortedSignal;
+function syncProps(target, next) {
+    for (let key in target) {
+        if (!(key in next)) {
+            delete target[key];
+        }
+    }
+    for (let key in next) {
+        target[key] = next[key];
+    }
+}
+/**
+ * Built-in component used to render nested frame content.
+ *
+ * @param handle Component handle for the frame instance.
+ * @returns A placeholder render function handled by the reconciler.
+ */
+export function Frame(handle) {
+    void handle;
+    return () => null; // reconciler renders
+}
+/**
+ * Built-in component used to group children without adding a host element.
+ *
+ * @param handle Component handle for the fragment instance.
+ * @returns A placeholder render function handled by the reconciler.
+ */
+export function Fragment(handle) {
+    void handle;
+    return () => null; // reconciler renders
+}
+/**
+ * Creates a frame handle with default no-op implementations for testing and internal wiring.
+ *
+ * @param def Partial frame-handle implementation to merge with the defaults.
+ * @returns A frame handle object.
+ */
+export function createFrameHandle(def) {
+    return Object.assign(new TypedEventTarget(), {
+        src: '/',
+        replace: notImplemented('replace not implemented'),
+        reload: notImplemented('reload not implemented'),
+    }, def);
+}
+function notImplemented(msg) {
+    return () => {
+        throw new Error(msg);
+    };
+}
+//# sourceMappingURL=component.js.map

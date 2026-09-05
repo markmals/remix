@@ -19,17 +19,11 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
     "./package.json": "./package.json"
-  },
-  "publishConfig": {
-    "exports": {
-      ".": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      },
-      "./package.json": "./package.json"
-    }
   },
   "devDependencies": {
     "@remix-run/assert": "workspace:*",
@@ -39,18 +33,10 @@
     "typescript": "catalog:"
   },
   "dependencies": {
-    "@remix-run/assets": "workspace:^",
-    "@remix-run/fetch-router": "workspace:^",
-    "@remix-run/response": "workspace:^",
-    "@remix-run/ui": "workspace:^"
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "clean": "git clean -fdX",
-    "prepublishOnly": "pnpm run build",
-    "test": "remix test",
-    "test:bun": "bun x --bun remix test",
-    "typecheck": "tsc --noEmit"
+    "@remix-run/assets": "markmals/remix#preview/ui-universal-renderer&path:packages/assets",
+    "@remix-run/fetch-router": "markmals/remix#preview/ui-universal-renderer&path:packages/fetch-router",
+    "@remix-run/response": "markmals/remix#preview/ui-universal-renderer&path:packages/response",
+    "@remix-run/ui": "markmals/remix#preview/ui-universal-renderer&path:packages/ui"
   },
   "keywords": [
     "fetch",

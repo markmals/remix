@@ -19,20 +19,14 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
     "./package.json": "./package.json"
   },
-  "publishConfig": {
-    "exports": {
-      ".": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      },
-      "./package.json": "./package.json"
-    }
-  },
   "dependencies": {
-    "@remix-run/multipart-parser": "workspace:^"
+    "@remix-run/multipart-parser": "markmals/remix#preview/ui-universal-renderer&path:packages/multipart-parser"
   },
   "devDependencies": {
     "@remix-run/assert": "workspace:*",
@@ -40,14 +34,6 @@
     "@remix-run/test": "workspace:*",
     "@types/node": "catalog:",
     "typescript": "catalog:"
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "clean": "git clean -fdX",
-    "prepublishOnly": "pnpm run build",
-    "test": "remix test",
-    "test:bun": "bun x --bun remix test",
-    "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "form-data",

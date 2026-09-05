@@ -24,26 +24,20 @@
     "node": ">=24.3.0"
   },
   "exports": {
-    ".": "./src/index.ts",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
     "./package.json": "./package.json"
   },
-  "publishConfig": {
-    "exports": {
-      ".": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      },
-      "./package.json": "./package.json"
-    }
-  },
   "dependencies": {
-    "@remix-run/assets": "workspace:^",
-    "@remix-run/data-table": "workspace:^",
-    "@remix-run/data-table-mysql": "workspace:^",
-    "@remix-run/data-table-postgres": "workspace:^",
-    "@remix-run/data-table-sqlite": "workspace:^",
-    "@remix-run/terminal": "workspace:^",
-    "@remix-run/test": "workspace:^",
+    "@remix-run/assets": "markmals/remix#preview/ui-universal-renderer&path:packages/assets",
+    "@remix-run/data-table": "markmals/remix#preview/ui-universal-renderer&path:packages/data-table",
+    "@remix-run/data-table-mysql": "markmals/remix#preview/ui-universal-renderer&path:packages/data-table-mysql",
+    "@remix-run/data-table-postgres": "markmals/remix#preview/ui-universal-renderer&path:packages/data-table-postgres",
+    "@remix-run/data-table-sqlite": "markmals/remix#preview/ui-universal-renderer&path:packages/data-table-sqlite",
+    "@remix-run/terminal": "markmals/remix#preview/ui-universal-renderer&path:packages/terminal",
+    "@remix-run/test": "markmals/remix#preview/ui-universal-renderer&path:packages/test",
     "jsonc-parser": "^3.3.1",
     "semver": "^7.7.4"
   },
@@ -52,15 +46,6 @@
     "@types/node": "catalog:",
     "@types/semver": "^7.5.8",
     "typescript": "catalog:"
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "clean": "git clean -fdX",
-    "postpack": "node ../../scripts/sync-cli-template.ts --clean",
-    "prepack": "node ../../scripts/sync-cli-template.ts",
-    "prepublishOnly": "pnpm run build",
-    "test": "remix test --concurrency 1",
-    "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "remix",
