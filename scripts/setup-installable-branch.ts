@@ -9,6 +9,9 @@ import { logAndExec } from './utils/process.ts'
  *
  *   pnpm install "remix-run/remix#preview/main&path:packages/remix"
  *
+ * Pass `--repository owner/repo` to prepare a fork, and `--no-commit` to
+ * inspect the generated package files before staging and committing them.
+ *
  * To do this, we can run a build, make some minor changes to the repo, and
  * commit the build + changes to the new branch. These changes would never be
  * down-merged back to the source branch.
@@ -27,12 +30,16 @@ import { logAndExec } from './utils/process.ts'
  * they install as nested deps the same way.
  */
 
-const { positionals } = util.parseArgs({
+const { positionals, values } = util.parseArgs({
   allowPositionals: true,
+  options: {
+    repository: { type: 'string', default: 'remix-run/remix' },
+    'no-commit': { type: 'boolean', default: false },
+  },
 })
 
-// Use first positional argument or fall back to --branch flag or default
 const installableBranch = positionals[0]
+const repository = values.repository
 if (!installableBranch) {
   throw new Error('Error: You must provide an installable branch name')
 }
@@ -55,26 +62,35 @@ logAndExec(`git checkout -B ${installableBranch}`)
 logAndExec('pnpm build')
 
 await updateGitignore()
+await runPrepackScripts()
 await updatePackageDependencies()
-await runCliPrepack()
 
-logAndExec('git add .')
-logAndExec(`git commit -a -m "installable build from ${sha}"`)
+if (!values['no-commit']) {
+  logAndExec('git add .gitignore packages')
+  logAndExec(`git commit -m "installable build from ${sha}"`)
+}
 
 console.log(
   [
     '',
-    `✅ Done!`,
+    values['no-commit']
+      ? 'Package files prepared. Review and commit them before pushing.'
+      : 'Installable build committed.',
     '',
-    `You can now push the \`${installableBranch}\` branch to GitHub and install via:`,
+    `Install from the \`${installableBranch}\` branch after pushing it to GitHub:`,
     '',
-    `  pnpm install "remix-run/remix#${installableBranch}&path:packages/remix"`,
+    `  pnpm install "${repository}#${installableBranch}&path:packages/remix"`,
   ].join('\n'),
 )
 
 // Remove `dist` from gitignore so we include built code in the repo
 async function updateGitignore() {
-  let linesToRemove = new Set(['dist/', '/packages/cli/template/'])
+  let linesToRemove = new Set([
+    'dist/',
+    '/packages/cli/template/',
+    '/packages/remix/src/**/README.md',
+    '/packages/remix/schema/',
+  ])
   let gitignorePath = path.join(process.cwd(), '.gitignore')
   let content = await fsp.readFile(gitignorePath, 'utf-8')
   let filtered = content
@@ -85,27 +101,28 @@ async function updateGitignore() {
   console.log('Updated .gitignore')
 }
 
-// Run the cli package's `prepack` script to sync the CLI template, then strip
-// the prepack/postpack scripts so they don't run again when the installable
-// branch is consumed. Warn if `prepack` has been removed upstream.
-async function runCliPrepack() {
-  let cliPackageJsonPath = path.join(process.cwd(), 'packages', 'cli', 'package.json')
-  let pkg = JSON.parse(await fsp.readFile(cliPackageJsonPath, 'utf-8'))
-  if (!pkg.scripts?.prepack) {
-    console.warn(
-      '⚠️  @remix-run/cli no longer defines a `prepack` script — skipping CLI template sync. ' +
-        'If the template is still required on the installable branch, update setup-installable-branch.ts.',
-    )
-    return
+// Materialize the files the pack lifecycle normally generates. The hooks
+// themselves are stripped later, along with every other lifecycle script.
+async function runPrepackScripts() {
+  for (let name of ['cli', 'remix']) {
+    let packageJsonPath = path.join(process.cwd(), 'packages', name, 'package.json')
+    let pkg = JSON.parse(await fsp.readFile(packageJsonPath, 'utf-8'))
+    if (!pkg.scripts?.prepack) {
+      console.warn(`${pkg.name} no longer defines a prepack script; skipping file preparation.`)
+      continue
+    }
+
+    console.log(`Running ${pkg.name} prepack script...`)
+    logAndExec(`pnpm --filter ${pkg.name} run prepack`)
   }
+}
 
-  console.log('Running CLI prepack script...')
-  logAndExec('pnpm --filter @remix-run/cli run prepack')
-
-  delete pkg.scripts.prepack
-  delete pkg.scripts.postpack
-  await fsp.writeFile(cliPackageJsonPath, JSON.stringify(pkg, null, 2) + '\n')
-  console.log('Removed prepack/postpack scripts from @remix-run/cli')
+// A consumer installing from Git gets the package exactly as committed here.
+// Every script on this branch drives the workspace it was built in: pnpm would
+// run `build` to prepare a Git dependency, and the rest need dev dependencies
+// this branch does not install.
+function removeScripts(pkg: { scripts?: Record<string, string> }): void {
+  delete pkg.scripts
 }
 
 // Update `package.json` files to point to this branch on github
@@ -127,12 +144,13 @@ async function updatePackageDependencies() {
         if (name.startsWith('@remix-run/')) {
           let packageDirName = name.replace('@remix-run/', '')
           pkg.dependencies[name] =
-            `remix-run/remix#${installableBranch}&path:packages/${packageDirName}`
+            `${repository}#${installableBranch}&path:packages/${packageDirName}`
         }
       }
     }
 
-    // Apply `publishConfig` overrides
+    removeScripts(pkg)
+
     if (pkg.publishConfig) {
       Object.assign(pkg, pkg.publishConfig)
       delete pkg.publishConfig
