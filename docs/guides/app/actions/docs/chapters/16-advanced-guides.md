@@ -1,6 +1,6 @@
 ---
 title: Advanced Guides
-description: Specialized patterns built from Remix's lower-level UI, terminal, proxy, stream, template, storage, and archive APIs.
+description: Specialized patterns built from Remix's lower-level UI, proxy, stream, template, storage, and archive APIs.
 ---
 
 These guides start after the main app path already works. Each one combines a focused Remix package with Web APIs for a specialized requirement rather than introducing another application architecture.
@@ -23,11 +23,7 @@ This customizes HTTP response rendering. To change where Remix components render
 
 The [Custom Renderers](/custom-renderers/) guide builds an in-memory document host for Remix components. It covers tree mutations, keyed moves, event targets, and the boundary between the host and the shared component runtime.
 
-## Build a terminal application
-
-[Terminal Applications](/terminal-applications/) builds an interactive album list with `Box`, `Text`, `style()`, and `on()`. Use the Node runner when your application owns the terminal.
-
-If you already manage input and output, continue with [Embedding Terminal Renderers](/embedding-terminal-renderers/) for byte handling, resizing, errors, and shutdown without the Node runner.
+Terminal rendering lives outside this repo. [`@pitlane/tui`](https://github.com/pitlane-tools/pitlane/tree/main/packages/tui) implements the same host interface on top of `@bomb.sh/tty`, and its own guides cover [terminal applications](https://github.com/pitlane-tools/pitlane/blob/main/docs/guides/terminal-applications.md) and [embedding terminal renderers](https://github.com/pitlane-tools/pitlane/blob/main/docs/guides/embedding-terminal-renderers.md).
 
 ## Proxy HTTP requests with Fetch {#fetch-proxying}
 

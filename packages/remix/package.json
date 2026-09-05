@@ -115,8 +115,6 @@
     "./terminal": "./src/terminal.ts",
     "./test": "./src/test.ts",
     "./test/cli": "./src/test/cli.ts",
-    "./tui": "./src/tui.ts",
-    "./tui/node": "./src/tui/node.ts",
     "./ui": "./src/ui.ts",
     "./ui-hmr": "./src/ui-hmr.ts",
     "./ui-hmr/assets": "./src/ui-hmr/assets.ts",
@@ -508,14 +506,6 @@
         "types": "./dist/test/cli.d.ts",
         "default": "./dist/test/cli.js"
       },
-      "./tui": {
-        "types": "./dist/tui.d.ts",
-        "default": "./dist/tui.js"
-      },
-      "./tui/node": {
-        "types": "./dist/tui/node.d.ts",
-        "default": "./dist/tui/node.js"
-      },
       "./ui": {
         "types": "./dist/ui.d.ts",
         "default": "./dist/ui.js"
@@ -706,8 +696,7 @@
     "@remix-run/node-hmr": "workspace:^",
     "@remix-run/ui-hmr": "workspace:^",
     "@remix-run/spa": "workspace:^",
-    "@remix-run/static-middleware": "workspace:^",
-    "@remix-run/tui": "workspace:^"
+    "@remix-run/static-middleware": "workspace:^"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node ../../scripts/copy-package-type-only-exports.ts .",

@@ -9,7 +9,7 @@ Runtime UI primitives for Remix apps, including the component runtime, server re
 - `mix` composition with event, ref, CSS, and animation helpers
 - Headless behavior primitives for controls such as menus, listboxes, popovers, selects, and comboboxes
 - Lower-level utilities for keyboard events, typeahead search, refs, attributes, and CSS transition timing
-- Experimental host-operation API shared by DOM, terminal, and custom renderers
+- Experimental host-operation API shared by the DOM renderer and custom renderers
 
 ## Installation
 
@@ -82,7 +82,7 @@ function Actions() {
 
 ## Custom Renderers
 
-`remix/ui/renderer` exposes an experimental `createRenderer(host)` API used by both the DOM and terminal renderers. Its Vue-style host interface lets Remix own component setup, stable props, context, mixin composition, keyed identity, batched updates, and lifetime cleanup while the host owns its node tree.
+`remix/ui/renderer` exposes an experimental `createRenderer(host)` API used by the DOM renderer and by out-of-tree backends. Its Vue-style host interface lets Remix own component setup, stable props, context, mixin composition, keyed identity, batched updates, and lifetime cleanup while the host owns its node tree.
 
 Given a host implementation and its container:
 
@@ -112,13 +112,13 @@ Implement these operations on `RendererHost<node, element, container>`. The cont
 
 Roots append to their container and remove only their own nodes. `handle.update()` schedules a component update; `flush()` drains pending work immediately outside a render. Nested renders on a shared scheduler join the enclosing batch, so commits and component tasks wait until the outer render finishes. Unmounting aborts component signals and settles pending updates.
 
-Custom hosts use the normal `mix` prop and `createMixin` API. Mixins compose props in order and share context, updates, tasks, and abort-signal cleanup with DOM mixins. `on()` works with a host's event target; `remix/tui` provides `style()` for terminal appearance and layout. Hosts receive borrowed composed prop bags: ignore the renderer-owned `children`, `mix`, and `key` fields, and never retain or mutate the bags.
+Custom hosts use the normal `mix` prop and `createMixin` API. Mixins compose props in order and share context, updates, tasks, and abort-signal cleanup with DOM mixins. `on()` works with a host's event target, and a backend can ship mixin factories of its own the way `@pitlane/tui` provides `style()` for terminal appearance and layout. Hosts receive borrowed composed prop bags: ignore the renderer-owned `children`, `mix`, and `key` fields, and never retain or mutate the bags.
 
 Reconciliation failures from `render()` throw synchronously. Scheduled update, queued-task, and commit failures emit a cancelable `RendererErrorEvent`: a standard `Event` with an `error` payload, not a browser-only `ErrorEvent`. Call `preventDefault()` when handling `event.error`, or the error is rethrown asynchronously.
 
 Reconciliation is not transactional: host mutations made before a failure are not rolled back. Unmount and recreate a failed root when a clean recovery is required.
 
-The [TUI renderer](https://github.com/remix-run/remix/tree/main/packages/tui) implements this interface using `@bomb.sh/tty`. Its [host operations](https://github.com/remix-run/remix/blob/main/packages/tui/src/lib/host.ts) and [interactive demo](https://github.com/remix-run/remix/tree/main/demos/tui) provide a working non-DOM example.
+The terminal renderer lives outside this repo: [`@pitlane/tui`](https://github.com/pitlane-tools/pitlane/tree/main/packages/tui) implements this interface using `@bomb.sh/tty`. Its [host operations](https://github.com/pitlane-tools/pitlane/blob/main/packages/tui/src/lib/host.ts) and [interactive demo](https://github.com/pitlane-tools/pitlane/tree/main/demos/tui) provide a working non-DOM example, and its guides cover [terminal applications](https://github.com/pitlane-tools/pitlane/blob/main/docs/guides/terminal-applications.md) and [embedding terminal renderers](https://github.com/pitlane-tools/pitlane/blob/main/docs/guides/embedding-terminal-renderers.md).
 
 The DOM renderer implements the same interface, with optional capabilities for hydration, Frame ranges, `innerHTML`, shared document-head ownership, and controlled-property reflection. `createRendererPersistence()` provides a deferred-removal scope that compatible hosts can share for keyed reclamation across roots. `createRendererScheduler()` lets roots share batches and before-mutation/before-commit hooks. See the [host contract](https://github.com/remix-run/remix/blob/main/packages/ui/src/runtime/universal/host.ts) for these integration points.
 

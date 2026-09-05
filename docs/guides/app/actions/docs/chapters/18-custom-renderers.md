@@ -11,7 +11,7 @@ Two Remix features share the word "renderer". `renderWith()`, in [Advanced Guide
 
 ## Get a build that has the renderer
 
-This chapter requires a Remix checkout that includes the experimental `remix/ui/renderer` export. We'll use that workspace copy rather than a published npm release. The [terminal demo](https://github.com/remix-run/remix/tree/main/demos/tui) uses the same setup with a terminal backend.
+This chapter requires a Remix checkout that includes the experimental `remix/ui/renderer` export. We'll use that workspace copy rather than a published npm release. The [`@pitlane/tui` demo](https://github.com/pitlane-tools/pitlane/tree/main/demos/tui) uses the same setup with a terminal backend.
 
 A custom host gets the shared component runtime:
 
@@ -20,7 +20,7 @@ A custom host gets the shared component runtime:
 - the `mix` prop, `createMixin()`, and `on()` bound to your own event target
 - batched updates with one host commit per batch
 
-The DOM and terminal renderers use this same reconciliation engine. Browser features sit behind optional host capabilities: hydration, Frame ranges, `innerHTML`, shared document-head ownership, controlled-property reflection, and deferred removal. This chapter's host implements none of those, so it rejects `<Frame />` and `innerHTML`. `css()` and navigation still require browser infrastructure. HTML stream serialization remains a separate pipeline rather than mounting a host tree.
+The DOM renderer and out-of-tree backends use this same reconciliation engine. Browser features sit behind optional host capabilities: hydration, Frame ranges, `innerHTML`, shared document-head ownership, controlled-property reflection, and deferred removal. This chapter's host implements none of those, so it rejects `<Frame />` and `innerHTML`. `css()` and navigation still require browser infrastructure. HTML stream serialization remains a separate pipeline rather than mounting a host tree.
 
 ## Create the project
 
@@ -374,7 +374,7 @@ The two reads, `parentNode` and `nextSibling`, are how the renderer walks a rang
 
 ## Give the elements a typed surface
 
-`<album title="Thriller" />` does not typecheck. `JSX.IntrinsicElements` declares the HTML, SVG, and MathML names, and `album` is not one of them. Wrap each host tag in a component that calls `createElement` instead, which is how `remix/tui` ships `Box` and `Text`. The props of your elements are then types you control.
+`<album title="Thriller" />` does not typecheck. `JSX.IntrinsicElements` declares the HTML, SVG, and MathML names, and `album` is not one of them. Wrap each host tag in a component that calls `createElement` instead, which is how `@pitlane/tui` ships `Box` and `Text`. The props of your elements are then types you control.
 
 ```ts filename=demos/doc-renderer/elements.ts
 import { createElement, createMixin } from "remix/ui";
@@ -814,6 +814,6 @@ Unmounting removes the tree, aborts every component signal, and settles pending 
 
 ## Where to go next
 
-`remix/tui` is this same interface with a real backend behind it. [Terminal Applications](/terminal-applications/) builds an interactive album list with `Box`, `Text`, `style()`, and `on()`, and [Embedding Terminal Renderers](/embedding-terminal-renderers/) covers owning the bytes, resizing, and shutdown yourself.
+The terminal renderer, [`@pitlane/tui`](https://github.com/pitlane-tools/pitlane/tree/main/packages/tui), is this same interface with a real backend behind it. It lives in its own repository, where [Terminal Applications](https://github.com/pitlane-tools/pitlane/blob/main/docs/guides/terminal-applications.md) builds an interactive album list with `Box`, `Text`, `style()`, and `on()`, and [Embedding Terminal Renderers](https://github.com/pitlane-tools/pitlane/blob/main/docs/guides/embedding-terminal-renderers.md) covers owning the bytes, resizing, and shutdown yourself.
 
-When you are ready to write a backend that paints, read its host next to yours: [`packages/tui/src/lib/host.ts`](https://github.com/remix-run/remix/blob/main/packages/tui/src/lib/host.ts) is a full implementation with real style validation and event dispatch, and [`packages/ui/src/runtime/universal/host.ts`](https://github.com/remix-run/remix/blob/main/packages/ui/src/runtime/universal/host.ts) carries the per-operation contract in its doc comments. The component model those operations serve is the subject of [Rendering UI](/rendering-ui/), and the mixin system behind `mix` is in [Interactivity](/interactivity/).
+When you are ready to write a backend that paints, read a real host next to yours: [`packages/tui/src/lib/host.ts`](https://github.com/pitlane-tools/pitlane/blob/main/packages/tui/src/lib/host.ts) in Pitlane is a full implementation with style validation and event dispatch, and [`packages/ui/src/runtime/universal/host.ts`](https://github.com/remix-run/remix/blob/main/packages/ui/src/runtime/universal/host.ts) carries the per-operation contract in its doc comments. The component model those operations serve is the subject of [Rendering UI](/rendering-ui/), and the mixin system behind `mix` is in [Interactivity](/interactivity/).

@@ -88,8 +88,6 @@
   "remix/terminal": "@remix-run/terminal",
   "remix/test": "@remix-run/test",
   "remix/test/cli": "@remix-run/test/cli",
-  "remix/tui": "@remix-run/tui",
-  "remix/tui/node": "@remix-run/tui/node",
   "remix/ui": "@remix-run/ui",
   "remix/ui-hmr": "@remix-run/ui-hmr",
   "remix/ui-hmr/assets": "@remix-run/ui-hmr/assets",
