@@ -28,7 +28,7 @@ function createTestFrame(root: Parameters<typeof createFrame>[0], options: TestF
     errorTarget: new EventTarget(),
     loadModule: () => () => () => null,
     pendingClientEntries: new Map(),
-    scheduler: createScheduler(document, new EventTarget(), createStyleManager()),
+    scheduler: createScheduler(document, new EventTarget()),
     data: {},
     moduleCache: new Map(),
     moduleLoads: new Map(),
@@ -70,7 +70,7 @@ describe('frames', () => {
 
     let errorTarget = new EventTarget()
     let styleManager = createStyleManager()
-    let scheduler = createScheduler(document, errorTarget, styleManager)
+    let scheduler = createScheduler(document, errorTarget)
     let loadModule = ((moduleUrl: string, exportName: string) => {
       expect(moduleUrl).toBe('/entry.js')
       expect(exportName).toBe('StreamingEntry')
@@ -641,7 +641,7 @@ describe('frames', () => {
       loadModule: () => modulePromise,
       resolveFrame: () => '',
       pendingClientEntries: new Map(),
-      scheduler: createScheduler(document, new EventTarget(), createStyleManager()),
+      scheduler: createScheduler(document, new EventTarget()),
       data,
       moduleCache: new Map(),
       moduleLoads: new Map(),
@@ -681,7 +681,7 @@ describe('frames', () => {
       },
       resolveFrame: () => '',
       pendingClientEntries: new Map(),
-      scheduler: createScheduler(document, errorTarget, styleManager),
+      scheduler: createScheduler(document, errorTarget),
       styleManager,
       data: {},
       moduleCache: new Map(),
@@ -730,7 +730,7 @@ describe('frames', () => {
         return response
       },
       pendingClientEntries: new Map(),
-      scheduler: createScheduler(document, new EventTarget(), createStyleManager()),
+      scheduler: createScheduler(document, new EventTarget()),
       data: {},
       moduleCache: new Map(),
       moduleLoads: new Map(),
@@ -768,7 +768,7 @@ describe('frames', () => {
         })
       },
       pendingClientEntries: new Map(),
-      scheduler: createScheduler(document, errorTarget, createStyleManager()),
+      scheduler: createScheduler(document, errorTarget),
       data: {},
       moduleCache: new Map(),
       moduleLoads: new Map(),
@@ -805,7 +805,7 @@ describe('frames', () => {
         })
       },
       pendingClientEntries: new Map(),
-      scheduler: createScheduler(document, errorTarget, createStyleManager()),
+      scheduler: createScheduler(document, errorTarget),
       data: {},
       moduleCache: new Map(),
       moduleLoads: new Map(),
@@ -840,7 +840,7 @@ describe('frames', () => {
         return htmlStream(['<main id="result">Saved</main>'])
       },
       pendingClientEntries: new Map(),
-      scheduler: createScheduler(document, new EventTarget(), createStyleManager()),
+      scheduler: createScheduler(document, new EventTarget()),
       data: {},
       moduleCache: new Map(),
       moduleLoads: new Map(),
@@ -888,7 +888,7 @@ describe('frames', () => {
         })
       },
       pendingClientEntries: new Map(),
-      scheduler: createScheduler(document, new EventTarget(), createStyleManager()),
+      scheduler: createScheduler(document, new EventTarget()),
       data: {},
       moduleCache: new Map(),
       moduleLoads: new Map(),
@@ -931,7 +931,7 @@ describe('frames', () => {
         })
       },
       pendingClientEntries: new Map(),
-      scheduler: createScheduler(document, new EventTarget(), createStyleManager()),
+      scheduler: createScheduler(document, new EventTarget()),
       data: {},
       moduleCache: new Map(),
       moduleLoads: new Map(),
@@ -963,7 +963,7 @@ describe('frames', () => {
 
     let errorTarget = new EventTarget()
     let styleManager = createStyleManager()
-    let scheduler = createScheduler(document, errorTarget, styleManager)
+    let scheduler = createScheduler(document, errorTarget)
     let frame = createFrame([outerStart, outerEnd], {
       src: 'https://example.com/outer',
       errorTarget,
@@ -999,7 +999,7 @@ describe('frames', () => {
     let preloadWasPresent = false
     let errorTarget = new EventTarget()
     let styleManager = createStyleManager()
-    let scheduler = createScheduler(document, errorTarget, styleManager)
+    let scheduler = createScheduler(document, errorTarget)
     let frame = createFrame(document, {
       src: 'https://example.com/initial',
       errorTarget,
@@ -1055,7 +1055,7 @@ describe('frames', () => {
     let preloadWasPresent = false
     let errorTarget = new EventTarget()
     let styleManager = createStyleManager()
-    let scheduler = createScheduler(document, errorTarget, styleManager)
+    let scheduler = createScheduler(document, errorTarget)
     let frame = createFrame([start, end], {
       src: 'https://example.com/frame',
       errorTarget,
@@ -1103,7 +1103,7 @@ describe('frames', () => {
 
     let errorTarget = new EventTarget()
     let styleManager = createStyleManager()
-    let scheduler = createScheduler(document, errorTarget, styleManager)
+    let scheduler = createScheduler(document, errorTarget)
     let frame = createFrame(document, {
       src: 'https://example.com/initial',
       errorTarget,
@@ -1150,7 +1150,7 @@ describe('frames', () => {
 
     let errorTarget = new EventTarget()
     let styleManager = createStyleManager()
-    let scheduler = createScheduler(document, errorTarget, styleManager)
+    let scheduler = createScheduler(document, errorTarget)
     let frame = createFrame(document, {
       src: 'https://example.com/initial',
       errorTarget,

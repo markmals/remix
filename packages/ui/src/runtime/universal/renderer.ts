@@ -1,116 +1,129 @@
 import { createFrameHandle } from '../component.ts'
-import { createCancelableComponentErrorEvent } from '../error-event.ts'
 import type { RemixNode } from '../jsx.ts'
 import { TypedEventTarget } from '../typed-event-target.ts'
 import { ROOT_VNODE } from '../vnode.ts'
+import { createRendererScheduler } from './batch.ts'
 import type { Renderer, RendererHost, RendererRoot, RendererRootEventMap } from './host.ts'
 import { createReconciler, FRAMES_UNSUPPORTED, type UniversalContext } from './reconcile.ts'
-import { createUpdateScheduler } from './scheduler.ts'
-import { hasScheduledAncestor, type MountedComponent, type MountedRoot } from './vnode.ts'
+import type { RendererRootOptions } from './root-options.ts'
+import type { MountedRoot } from './vnode.ts'
+
+let componentCount = 0
 
 /**
- * Creates a renderer for a host.
+ * Creates a renderer from host operations, without depending on DOM globals.
  *
- * The renderer is host-agnostic and DOM-free: component semantics, keyed
- * identity, fragment ranges, and update batching are shared with the DOM
- * renderer, while every mutation goes through the host operations.
+ * DOM, terminal and custom hosts share component lifetimes, keyed reconciliation,
+ * mixins and scheduling. Optional host capabilities add hydration, Frames, shared
+ * elements and retained-node removal without replacing the reconciliation engine.
  *
- * @example Rendering into a custom node graph
- * ```ts
- * let renderer = createRenderer<SceneNode, SceneElement>(host)
- * let root = renderer.createRoot(container)
- * root.addEventListener('error', (event) => {
- *   event.preventDefault()
- *   report(event.error)
- * })
- * root.render(<App />)
- * ```
- *
- * @param host Host operations used to mutate the target tree.
- * @returns A renderer bound to the host.
+ * @param host Operations for the target node graph.
+ * @returns A renderer that creates independently owned roots.
  */
-export function createRenderer<node extends object, element extends node>(
-  host: RendererHost<node, element>,
-): Renderer<element> {
+export function createRenderer<
+  node extends object,
+  element extends node,
+  container extends node = element,
+>(host: RendererHost<node, element, container>): Renderer<node, element, container> {
   let reconciler = createReconciler(host)
-  let componentCount = 0
 
   return {
-    createRoot(container: element): RendererRoot {
+    createRoot(
+      container: container,
+      options: RendererRootOptions<node, element, container> = {},
+    ): RendererRoot {
+      if (options.hydration && !host.hydration) {
+        throw new Error('Hydration is not supported by this renderer host')
+      }
+
       let events = new TypedEventTarget<RendererRootEventMap>()
-      let root: MountedRoot<node, element> = {
+      let root: MountedRoot<node, element, container> = {
         kind: 'root',
         type: ROOT_VNODE,
         _node: container,
         _children: [],
+        _anchor: options.before,
+        _componentId: options.componentId,
       }
       let unmounted = false
-      let context: UniversalContext<node, element>
-
-      let scheduler = createUpdateScheduler<MountedComponent<node, element>, element>({
-        update(target, updateParent) {
-          reconciler.updateComponent(target, updateParent, context)
-        },
-        release(target) {
-          reconciler.releaseComponent(target, context)
-        },
-        hasScheduledAncestor,
-        describe: (target) => target.type.name || 'Anonymous',
-        commit: () => host.commit?.(container),
-        reportError(error) {
-          // Errors from a scheduled update or a component task have no caller
-          // to throw to. Listeners can claim one with preventDefault();
-          // anything nobody claims is rethrown rather than swallowed.
-          let handled = !events.dispatchEvent(createCancelableComponentErrorEvent(error))
-          if (handled) return
-          setTimeout(() => {
-            throw error
-          })
-        },
-      })
-
-      context = {
-        frame: createFrameHandle({
-          replace() {
-            throw new Error(FRAMES_UNSUPPORTED)
+      let scheduler =
+        options.scheduler ??
+        createRendererScheduler<node, element, container>({
+          reportError(error) {
+            let event = Object.assign(new Event('error', { cancelable: true }), { error })
+            if (!events.dispatchEvent(event)) return
+            setTimeout(() => {
+              throw error
+            }, 0)
           },
-          reload() {
-            throw new Error(FRAMES_UNSUPPORTED)
-          },
-        }),
+        })
+      let frame = options.frame ?? createUnsupportedFrame()
+      let context: UniversalContext<node, element, container> = {
+        frame,
         scheduler,
-        nextComponentId: () => `c${++componentCount}`,
+        reconciler,
+        hydration: options.hydration,
+        nextComponentId(parent) {
+          if (parent.kind === 'root' && parent._componentId !== undefined) {
+            let id = parent._componentId
+            parent._componentId = undefined
+            return id
+          }
+          return `c${++componentCount}`
+        },
+        getFrameByName(name) {
+          return options.getFrameByName?.(name)
+        },
+        getTopFrame() {
+          return options.getTopFrame?.() ?? frame
+        },
+        shouldRemountComponent: options.shouldRemountComponent,
+        markDirty() {
+          if (host.commit) scheduler.markDirty(commit)
+        },
+      }
+
+      function commit(): void {
+        host.commit?.(container)
       }
 
       return Object.assign(events, {
-        render(element: RemixNode): void {
-          if (unmounted) throw new Error('Cannot render into an unmounted renderer root')
-
+        render(input: RemixNode): void {
+          if (unmounted) throw new Error('Cannot render an unmounted root')
           scheduler.runSync(() => {
-            let curr = root._children.length > 0 ? root._children[0] : null
-            let committed = reconciler.renderRoot(curr, element, root, context)
-            if (root._children.length === 0) {
-              root._children.push(committed)
-            } else {
-              root._children[0] = committed
-            }
+            context.markDirty()
+            let current = root._children.length > 0 ? root._children[0] : null
+            let committed = reconciler.renderRoot(current, input, root, context)
+            root._children[0] = committed
+            context.hydration = undefined
           })
         },
-
         flush(): void {
           scheduler.flush()
         },
-
         unmount(): void {
           if (unmounted) return
           unmounted = true
-
           if (root._children.length === 0) return
-          let mounted = root._children[0]
-          root._children.length = 0
-          scheduler.runSync(() => reconciler.removeNode(mounted, context))
+          scheduler.runSync(() => {
+            context.markDirty()
+            let current = root._children[0]
+            root._children.length = 0
+            reconciler.removeNode(current, context)
+          })
         },
       })
     },
   }
+}
+
+function createUnsupportedFrame() {
+  return createFrameHandle({
+    replace() {
+      throw new Error(FRAMES_UNSUPPORTED)
+    },
+    reload() {
+      throw new Error(FRAMES_UNSUPPORTED)
+    },
+  })
 }

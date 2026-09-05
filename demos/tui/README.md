@@ -25,4 +25,4 @@ Resize the terminal to exercise tty's layout and full redraw. At 40 columns by 1
 
 `app.tsx` uses normal Remix component setup/render functions, context, `handle.update()`, `handle.signal`, `Box`, and `Text`. Layout and appearance use `mix={style(...)}` from `remix/tui`; pointer events compose with `on()` from `remix/ui`. `main.tsx` connects the Node terminal root and waits for its `closed` promise. The renderer backend uses `@bomb.sh/tty` for layout and input, not a DOM shim.
 
-The DOM renderer has not been migrated to the experimental host interface. See the [renderer package](https://github.com/remix-run/remix/tree/main/packages/tui) for supported operations and boundaries.
+The DOM and terminal backends use the same `remix/ui/renderer` host interface and reconciliation engine. See the [renderer package](https://github.com/remix-run/remix/tree/main/packages/tui) for terminal-specific operations and boundaries.

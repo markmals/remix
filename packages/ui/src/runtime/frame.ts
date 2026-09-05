@@ -639,7 +639,7 @@ export function createFrame(root: FrameRoot, init: FrameInit): Frame {
   return {
     render,
     ready: () => readyPromise,
-    flush: () => context.scheduler.dequeue(),
+    flush: () => context.scheduler.flush(),
     clearPendingTemplateWatch: clearPendingFrameTemplateWatch,
     isDisplayingResolvedContent: () => displayedContentStatus === 'resolved',
     beginClientFrameReloadForAncestorReload,

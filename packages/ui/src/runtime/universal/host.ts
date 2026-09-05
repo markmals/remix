@@ -1,55 +1,57 @@
-import type { ComponentErrorEvent } from '../error-event.ts'
+import type { FrameHandle, FrameProps } from '../component.ts'
 import type { RemixNode } from '../jsx.ts'
 import type { TypedEventTarget } from '../typed-event-target.ts'
+import type { RendererFrame, RendererHydration, RendererHydrationCursor } from './capabilities.ts'
+import type { RendererPersistence } from './persistence.ts'
+import type { RendererRootOptions } from './root-options.ts'
 
 /**
- * Host operations a renderer backend implements to mount Remix trees onto an
- * arbitrary node graph.
+ * Operations for mounting Remix trees onto an opaque node graph.
  *
- * The renderer never touches DOM globals, so a backend can be a terminal
- * layout tree, a canvas scene graph, or a test double. Nodes are opaque to the
- * renderer: it only creates them, mutates them through these operations, and
- * asks the host how they are related.
+ * DOM, terminal and custom hosts use the same reconciliation engine. `container`
+ * distinguishes root containers from created elements when the platform needs it.
+ * Prop bags are borrowed: never retain or mutate them, and ignore the renderer-owned
+ * `children`, `mix` and `key` fields in element creation and prop updates.
  */
-export interface RendererHost<node extends object, element extends node> {
+export interface RendererHost<
+  node extends object,
+  element extends node,
+  container extends node = element,
+> {
   /**
-   * Creates an element for a host tag.
+   * Creates an element and applies its initial composed props.
    *
-   * This is the only place initial props arrive: the renderer does not replay
-   * {@link RendererHost.patchProp} for props present on mount, so the host must
-   * apply `props` here. `props` is the live props object from the element, so it
-   * may contain `children` (already reconciled by the renderer, and always to be
-   * ignored here) and must not be retained or mutated.
-   *
-   * @param type Host tag name from JSX, e.g. `tui-box`.
-   * @param props Props for the element, including `children`.
+   * @param type Host tag from JSX.
+   * @param props Initial props; ignore renderer-owned fields.
+   * @param parent Parent used to resolve host context such as document or namespace.
    * @returns The created element.
    */
-  createElement(type: string, props: Readonly<Record<string, unknown>>): element
+  createElement(
+    type: string,
+    props: Readonly<Record<string, unknown>>,
+    parent: element | container,
+  ): element
 
   /**
    * Creates a text node.
    *
    * @param text Initial text content.
+   * @param parent Parent used to resolve host context.
    * @returns The created node.
    */
-  createText(text: string): node
+  createText(text: string, parent: element | container): node
 
   /**
-   * Creates an invisible node used as a positional anchor.
-   *
-   * The renderer inserts one of these when a node is replaced by a node of a
-   * different type, so the replacement lands in the exact position of the old
-   * node. It is inserted and removed inside the same batch, before
-   * {@link RendererHost.commit} runs, and must be inert in layout and output.
+   * Creates an invisible positional anchor, inert in layout and output.
    *
    * @param text Debug label for the anchor.
+   * @param parent Parent used to resolve host context.
    * @returns The created node.
    */
-  createComment(text: string): node
+  createComment(text: string, parent: element | container): node
 
   /**
-   * Replaces the text content of a node created by {@link RendererHost.createText}.
+   * Replaces the content of a node created by `createText`.
    *
    * @param node Text node to update.
    * @param text New text content.
@@ -57,34 +59,33 @@ export interface RendererHost<node extends object, element extends node> {
   setText(node: node, text: string): void
 
   /**
-   * Applies a single prop change to an element.
+   * Applies updated composed props, including removal of props absent from `next`.
    *
-   * Only called for updates, never on mount. A removed prop arrives with
-   * `next` as `undefined` and `previous` holding the old value. `children` and
-   * `key` are never passed.
+   * Called on updates, not on mount. Full bags allow related props, such as DOM
+   * `class` and `className`, to be resolved together. Ignore renderer-owned fields.
    *
    * @param element Element to update.
-   * @param name Prop name.
-   * @param previous Previous value, or `undefined` when the prop is new.
-   * @param next Next value, or `undefined` when the prop was removed.
+   * @param previous Previous composed props.
+   * @param next Next composed props.
    */
-  patchProp(element: element, name: string, previous: unknown, next: unknown): void
+  patchProps(
+    element: element,
+    previous: Readonly<Record<string, unknown>>,
+    next: Readonly<Record<string, unknown>>,
+  ): void
 
   /**
-   * Inserts a node into a parent, moving it if it is already mounted.
+   * Inserts a node, moving it if already mounted.
    *
    * @param node Node to insert or move.
    * @param parent Parent to insert into.
    * @param before Sibling to insert before, or `null` to append.
    */
-  insert(node: node, parent: element, before: node | null): void
+  insert(node: node, parent: element | container, before: node | null): void
 
   /**
-   * Detaches a node from its parent.
-   *
-   * Called for the top of a removed subtree, so descendants are torn down
-   * without further host calls. Must tolerate a node whose parent is already
-   * gone.
+   * Detaches the top of a removed subtree; descendants need no further removals.
+   * Must tolerate an already-detached node.
    *
    * @param node Node to detach.
    */
@@ -94,110 +95,152 @@ export interface RendererHost<node extends object, element extends node> {
    * Reads the current parent of a node.
    *
    * @param node Node to inspect.
-   * @returns The parent element, or `null` when the node is detached.
+   * @returns Its parent, or `null` when detached.
    */
-  parentNode(node: node): element | null
+  parentNode(node: node): element | container | null
 
   /**
-   * Reads the next sibling of a node.
-   *
-   * Used to walk a contiguous range when a multi-node fragment moves.
+   * Reads the next sibling, including host-owned nodes outside the rendered tree.
    *
    * @param node Node to inspect.
-   * @returns The next sibling, or `null` when the node is last.
+   * @returns Its next sibling, or `null` when last.
    */
   nextSibling(node: node): node | null
 
   /**
-   * Called once per batch after every mutation, before component tasks and
-   * `handle.update()` promises settle.
+   * Publishes mutations once per batch, before component tasks and update promises.
    *
-   * Backends that paint from a scene graph should redraw here instead of
-   * redrawing per mutation.
-   *
-   * @param container Container of the root that was rendered.
+   * @param container Container of the root that changed.
    */
-  commit?(container: element): void
+  commit?(container: container): void
 
   /**
-   * Reads the event target mixins bind to for an element.
+   * Supplies a stable event target for `mix` and its lifecycle events.
+   * Hosts without this operation reject `mix` rather than ignoring it.
    *
-   * Implement it to support the `mix` prop: the renderer runs the shared mixin
-   * runtime against the returned target, so `on(...)` handlers, mixin insert,
-   * update, and remove lifecycles work exactly as they do on the DOM. A host
-   * without this operation rejects every `mix` prop instead of silently
-   * dropping it.
-   *
-   * The returned target must be stable for the lifetime of the element, and
-   * events dispatched on it must be real `Event` instances. Throwing rejects
-   * mixins for that element and the error surfaces from the render that
-   * mounted it.
-   *
-   * `beforeRemove` node persistence is not supported: a mixin that calls
-   * `persistNode()` during removal receives an already-aborted signal, because
-   * the renderer removes the node as soon as it is unmounted.
-   *
-   * @param element Element the `mix` prop was applied to.
-   * @returns The event target mixins observe.
+   * @param element Element receiving mixins.
+   * @returns The element's event target, which must dispatch real `Event` instances.
    */
   getEventTarget?(element: element): EventTarget
+
+  /**
+   * Identifies host-owned singleton elements, such as `document.head`.
+   * These never move or detach; only their renderer-owned children are managed.
+   *
+   * @param element Element to inspect.
+   * @returns Whether the host retains ownership of the physical element.
+   */
+  isSharedElement?(element: element): boolean
+
+  /**
+   * Applies raw HTML in place of rendered children. Hosts without it reject `innerHTML`.
+   *
+   * @param element Element whose content changes.
+   * @param html Raw HTML, or an empty string when returning to rendered children.
+   */
+  setInnerHTML?(element: element, html: string): void
+
+  /**
+   * Clears an entirely renderer-owned child list in one host operation.
+   *
+   * @param parent Container whose child lifetimes have already been released.
+   */
+  clearChildren?(parent: element | container): void
+
+  /**
+   * Finalizes an element after its children and props, before post-commit tasks.
+   * Also runs after a mixin-only prop update or retained-node reclamation.
+   *
+   * @param element Element being committed.
+   * @param props Current composed props; ignore renderer-owned fields.
+   */
+  finalizeElement?(element: element, props: Readonly<Record<string, unknown>>): void
+
+  /**
+   * Releases host-specific element resources, without detaching the element.
+   *
+   * @param element Element whose lifetime ended.
+   * @param discarded Whether the physical element leaves with the removed subtree.
+   */
+  releaseElement?(element: element, discarded: boolean): void
+
+  /**
+   * Shares deferred removal and keyed reclamation between compatible renderers.
+   * Omit for immediate removal and canceled persistence.
+   */
+  persistence?: RendererPersistence<node, element, container>
+
+  /** First-render adoption operations for existing host content. */
+  hydration?: RendererHydration<node, element, container>
+
+  /**
+   * Mounts or adopts a host-owned Frame range. Hosts without it reject `Frame`.
+   *
+   * @param props Initial frame props.
+   * @param parent Parent that owns the range.
+   * @param before Exclusive insertion boundary, or `null` to append.
+   * @param frame Closest frame supplied by the root.
+   * @param cursor First-render adoption position, when hydrating.
+   * @returns The mounted frame range and its lifecycle operations.
+   */
+  createFrame?(
+    props: FrameProps,
+    parent: element | container,
+    before: node | null,
+    frame: FrameHandle,
+    cursor?: RendererHydrationCursor<node>,
+  ): RendererFrame<node>
+}
+
+/** Portable error event emitted by a renderer, without browser-only metadata. */
+export interface RendererErrorEvent extends Event {
+  /** The original value thrown while rendering or running queued work. */
+  readonly error: unknown
 }
 
 /**
- * Events emitted by a renderer root.
- *
- * `error` carries failures that have no caller to throw to: a scheduled
- * component update, a queued component task, a host commit, or a runaway
- * update loop. The event is cancelable, and cancellation is the handshake:
- * calling `preventDefault()` claims the error as handled, and an error nobody
- * claims is rethrown from a macrotask so the platform reports it instead of it
- * being swallowed.
+ * Root events for scheduled updates, queued tasks, host commits and runaway loops.
+ * An unhandled `error` is rethrown from a macrotask; `preventDefault()` claims it.
+ * Roots using an explicitly shared scheduler use that scheduler's error policy.
  */
 export type RendererRootEventMap = {
-  error: ComponentErrorEvent
+  /** An asynchronous rendering failure. */
+  error: RendererErrorEvent
 }
 
-/**
- * Controller for one mounted tree.
- */
+/** Controller for one mounted tree. */
 export type RendererRoot = TypedEventTarget<RendererRootEventMap> & {
   /**
-   * Renders a tree into the root's container, synchronously.
-   *
-   * Reconciliation errors are thrown from this call after the renderer has
-   * released the lifetimes it created. Throws if the root is unmounted.
-   * Host mutations are not rolled back on failure; unmount and recreate the
-   * root when a clean recovery is required.
+   * Renders synchronously and throws reconciliation failures.
+   * Throws after unmount. Mutations are not rolled back; unmount and recreate for recovery.
    *
    * @param element Tree to render.
    */
   render(element: RemixNode): void
 
-  /**
-   * Runs any pending component updates and tasks immediately instead of
-   * waiting for the scheduled microtask.
-   */
+  /** Drains pending work; nested renders finish their enclosing batch first. */
   flush(): void
 
-  /**
-   * Unmounts the tree, aborting component signals and settling pending
-   * `handle.update()` promises. Idempotent.
-   */
+  /** Unmounts the tree and releases its lifetimes. Idempotent. */
   unmount(): void
 }
 
-/**
- * Renderer bound to one {@link RendererHost}.
- */
-export interface Renderer<element extends object> {
+/** Renderer bound to one host's operations. */
+export interface Renderer<
+  node extends object,
+  element extends node = node,
+  container extends node = element,
+> {
   /**
-   * Creates a root that renders into `container`.
+   * Creates a root, appending to existing content unless adoption or a boundary is supplied.
+   * The root manages only its own nodes and adopted content.
    *
-   * The renderer appends to the container and only manages the nodes it
-   * created, so a container may hold host-owned children.
-   *
-   * @param container Element to render into.
+   * @param container Root container.
+   * @param options Host integration and scheduling options.
    * @returns A root controller.
    */
-  createRoot(container: element): RendererRoot
+  createRoot(
+    container: container,
+    options?: RendererRootOptions<node, element, container>,
+  ): RendererRoot
 }

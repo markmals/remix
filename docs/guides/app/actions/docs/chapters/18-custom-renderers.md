@@ -20,7 +20,7 @@ A custom host gets the shared component runtime:
 - the `mix` prop, `createMixin()`, and `on()` bound to your own event target
 - batched updates with one host commit per batch
 
-The DOM runtime keeps the rest. `<Frame />` throws `Frames are not supported by this renderer host`, `innerHTML` is rejected, `css()` is DOM-only, and hydration, navigation, retained-node animations, and DOM-specific controls stay in the browser runtime. The DOM reconciler has not been migrated to this interface either. The two renderers share the component and mixin lifecycles and the keyed matching code, not the reconciler.
+The DOM and terminal renderers use this same reconciliation engine. Browser features sit behind optional host capabilities: hydration, Frame ranges, `innerHTML`, shared document-head ownership, controlled-property reflection, and deferred removal. This chapter's host implements none of those, so it rejects `<Frame />` and `innerHTML`. `css()` and navigation still require browser infrastructure. HTML stream serialization remains a separate pipeline rather than mounting a host tree.
 
 ## Create the project
 
@@ -81,7 +81,7 @@ pnpm install
 
 ## Model the node graph
 
-`RendererHost<node, element>` takes two type parameters. `node` is anything the tree can hold, `element` is the subset that can carry props and children, and `element extends node`. Our document has three kinds of node and one of them is an element.
+`RendererHost<node, element, container>` describes the host's node types. `node` is anything the tree can hold, `element` is the subset that can carry props and children, and `container` defaults to `element`. Both extend `node`. Our document uses elements as containers, so we only supply the first two type parameters.
 
 ```ts filename=demos/doc-renderer/doc-tree.ts
 import { TypedEventTarget } from "remix/ui";
@@ -254,11 +254,9 @@ export function createDocument(): DocDocument {
   let host: RendererHost<DocNode, DocElement> = {
     createElement(type, props) {
       let element = new DocElement(type);
-      // The only place initial props arrive: the renderer never replays
-      // patchProp for a prop that was already there on mount. `children`
-      // belongs to the reconciler, and `props` is only safe to read here.
+      // Prop bags are borrowed and include fields owned by the renderer.
       for (let name in props) {
-        if (name === "children") continue;
+        if (name === "children" || name === "mix" || name === "key") continue;
         if (props[name] !== undefined) element.props[name] = props[name];
       }
       ops.push(`createElement <${type}>`);
@@ -281,10 +279,13 @@ export function createDocument(): DocDocument {
       node.text = text;
     },
 
-    patchProp(element, name, previous, next) {
-      ops.push(`patchProp <${element.type}>.${name} ${show(previous)} -> ${show(next)}`);
-      if (next === undefined) delete element.props[name];
-      else element.props[name] = next;
+    patchProps(element, previous, next) {
+      for (let name in previous) {
+        if (!(name in next)) setProp(element, name, previous[name], undefined);
+      }
+      for (let name in next) {
+        if (previous[name] !== next[name]) setProp(element, name, previous[name], next[name]);
+      }
     },
 
     insert(node, parent, before) {
@@ -336,6 +337,13 @@ export function createDocument(): DocDocument {
     },
   };
 
+  function setProp(element: DocElement, name: string, previous: unknown, next: unknown): void {
+    if (name === "children" || name === "mix" || name === "key") return;
+    ops.push(`patch <${element.type}>.${name} ${show(previous)} -> ${show(next)}`);
+    if (next === undefined) delete element.props[name];
+    else element.props[name] = next;
+  }
+
   return {
     container,
     host,
@@ -354,13 +362,13 @@ export function createDocument(): DocDocument {
 
 Four of those operations have contracts that are easy to get wrong on the first try.
 
-**`createElement` is the only place initial props arrive.** The renderer does not replay `patchProp` for props that were present at mount, so an element that ignores `props` here mounts blank and never recovers. Skip `children`, because the reconciler mounts children itself, and do not retain or mutate the props object: it is the live props object of the element being rendered.
+**`createElement` is the only place initial props arrive.** The renderer does not replay `patchProps` after creation. Apply initial props here, skipping the renderer-owned `children`, `mix`, and `key` fields. Do not retain or mutate the props object. Creation operations also receive the parent as their last argument, which a DOM host uses to choose the document and namespace. This host does not need that context, so it leaves the argument out.
 
 **`insert` is also `move`.** The renderer calls it with nodes that already have a parent, and `before` is always a node currently in `parent` or `null` to append. When the node being moved is a sibling of the anchor, its own removal shifts the anchor's index, which is why this host detaches first and looks the anchor up afterwards. Getting that order backwards puts moved nodes one slot off, and only in the reorder case.
 
 **`remove` receives the top of a removed subtree.** Descendants are gone with it and never arrive as separate calls, so a backend that releases resources per node should walk the subtree itself. It also has to tolerate a node whose parent is already gone, because the renderer removes its replacement anchors unconditionally.
 
-**`patchProp` runs for updates only.** A removed prop arrives with `next` as `undefined`, `children` and `key` never arrive at all, and the comparison behind it is `!==`. A prop rebuilt every render, such as the `style` object below, is patched on every update even when its fields are unchanged, so keep this operation cheap and safe to repeat.
+**`patchProps` runs for updates only.** It receives the complete previous and next composed prop bags, so the host chooses how to compare related fields and remove missing props. Our host uses `!==` and treats `undefined` as removal. It skips `children`, `mix`, and `key` just as creation does. A prop rebuilt every render, such as the `style` object below, is patched even when its fields are unchanged.
 
 The two reads, `parentNode` and `nextSibling`, are how the renderer walks a range when a fragment or component covering several sibling nodes moves. `commit` is optional and runs once per batch, after every mutation and before component tasks. Here it appends a line to the log. A backend that paints from a scene graph redraws here instead of redrawing per mutation. `getEventTarget` is optional too, and a host without it rejects every `mix` prop with `Mixins are not supported by this renderer host` rather than dropping mixins silently.
 
@@ -446,9 +454,9 @@ export function Line(handle: Handle<LineProps>): () => RemixNode {
 }
 ```
 
-Each wrapper names the props its tag accepts and passes children as the third argument to `createElement`. Building that object fresh on every render is deliberate: `handle.props` keeps one identity for the life of the component, and the renderer diffs the object it was handed prop by prop against the previous one, so reusing one object would hide every change.
+Each wrapper names the props its tag accepts and passes children as the third argument to `createElement`. Building that object fresh on every render is deliberate: `handle.props` keeps one identity for the life of the component, and the host compares the object it was handed against the previous one, so reusing one object would hide changes.
 
-`style` is a real mixin and never touches a node. It reads the `style` prop the mixins ahead of it composed, merges its own fields over it, and re-renders the element with the result, so `mix={[style({ weight: "normal" }), style({ weight: "bold" })]}` arrives at the host as one `style` prop with `weight: "bold"`. Nothing is retained between renders, which is what makes dropping a conditional `style()` clear exactly the fields it contributed. The `mix` prop itself is resolved before `createElement` runs and never reaches the host.
+`style` is a real mixin and never touches a node. It reads the `style` prop the mixins ahead of it composed, merges its own fields over it, and re-renders the element with the result, so `mix={[style({ weight: "normal" }), style({ weight: "bold" })]}` arrives at the host as one `style` prop with `weight: "bold"`. Nothing is retained between renders, which is what makes dropping a conditional `style()` clear exactly the fields it contributed. The renderer resolves `mix` before calling the host, which ignores that field in the borrowed prop bag.
 
 `MixInput<DocElement>` is the type that ties the two halves together. It types the `mix` prop, and it tells `on()` which event map to use, so `on("doc:press", ...)` resolves against `DocElementEventMap` the way `on("click", ...)` resolves against `HTMLElementEventMap`.
 
@@ -682,7 +690,7 @@ insert <library Albums (3)> into <library-root> before end
 commit <library-root>
 ```
 
-A mount fills a subtree bottom up. Each element is created with its props already applied, its children are inserted into it, and only then is it inserted into its own parent, so a node is never visible in an incomplete state. The `<library>` element reaches the container last, and `commit` runs once for the whole batch rather than once per mutation. The `style` prop is on the elements even though no `patchProp` call appears, because the mixins composed it before `createElement` ran.
+A mount fills a subtree bottom up. Each element is created with its props already applied, its children are inserted into it, and only then is it inserted into its own parent. The `<library>` element reaches the container last, and `commit` runs once for the whole batch rather than once per mutation. The `style` prop is on the elements even though no prop patch appears, because the mixins composed it before `createElement` ran.
 
 ## Update one album
 
@@ -698,15 +706,15 @@ Step 2 dispatches a real `Event` on the first `<album>` element. The `on("doc:pr
   ...
 --- host operations ---
 setText " · 0 plays" -> " · 1 plays"
-patchProp <line>.style {"color":"dim"} -> {"color":"dim"}
-patchProp <album>.selected false -> true
-patchProp <album>.style {"color":"default","weight":"normal"} -> {"color":"default","weight":"bold"}
+patch <line>.style {"color":"dim"} -> {"color":"dim"}
+patch <album>.selected false -> true
+patch <album>.style {"color":"default","weight":"normal"} -> {"color":"default","weight":"bold"}
 commit <library-root>
 ```
 
 Only the pressed row re-rendered, and inside it only the text node whose value changed was touched. The artist text node, the `<line>` and `<album>` elements, and the whole rest of the list are the same objects they were after the mount.
 
-That `<line>.style` patch with identical values is the `!==` comparison showing through: `style()` builds a new object every render, so the prop is always a new reference. This is why `patchProp` should be cheap and idempotent, and why a backend that has to diff deeply should do it there.
+That `<line>.style` patch with identical values is our host's `!==` comparison showing through: `style()` builds a new object every render, so the prop is always a new reference. A backend that needs to compare fields more deeply can do that inside `patchProps`.
 
 ## Reverse the list
 
@@ -742,7 +750,7 @@ Step 4 renders the list without Rumours.
 --- host operations ---
 remove <album Rumours>
 ... four style patches for the surviving rows ...
-patchProp <library>.title "Albums (3)" -> "Albums (2)"
+patch <library>.title "Albums (3)" -> "Albums (2)"
 commit <library-root>
 detached from the tree: true
 host operations from that dispatch: 0
@@ -785,7 +793,7 @@ commit <library-root>
 
 The anchor from earlier shows up here. Replacing the `<line>` with a component of a different type meant holding its position with a `createComment` node, removing the old node, and mounting the replacement in its place. The replacement threw, so the anchor was cleaned up on the way out and the tree kept the empty `<library>`.
 
-Reconciliation is not transactional. Mutations that already happened are not rolled back, and the title patch that would have followed the children never ran. The renderer does release what it created in the failed pass, so components that mounted during it are aborted rather than left live, but the host tree is in an intermediate state. When you need a clean recovery, unmount the root and create a new one.
+Reconciliation is not transactional. Mutations that already happened are not rolled back, and the title patch that would have followed the children never ran. Completed updates and replacements remain owned by the root, so they can still update and be unmounted. Abandoned mounts are cleaned up, but the host tree can contain partial output from the failed render. When you need a clean recovery, unmount the root and create a new one.
 
 ## Unmount
 
@@ -797,7 +805,7 @@ Step 8 pushes a node the renderer knows nothing about into the container, then u
 --- host operations ---
 remove <library Albums (2)>
 commit <library-root>
-render after unmount: Error: Cannot render into an unmounted renderer root
+render after unmount: Error: Cannot render an unmounted root
 ```
 
 The host-owned text survived. A root appends to its container and manages only the nodes it created, so a container can hold chrome the embedder owns, and the renderer keeps its own range in front of trailing nodes it did not create.

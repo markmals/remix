@@ -1,7 +1,16 @@
 import { expect } from '@remix-run/assert'
 import { describe, it } from '@remix-run/test'
 import type { Assert, Equal } from './utils.ts'
-import { createRenderer, type RendererHost, type RendererRoot } from '../renderer.ts'
+import {
+  createRenderer,
+  createRendererPersistence,
+  createRendererScheduler,
+  type Renderer,
+  type RendererHost,
+  type RendererPersistence,
+  type RendererRoot,
+  type RendererScheduler,
+} from '../renderer.ts'
 import type { Handle, RemixNode } from '../runtime/component.ts'
 import { createElement } from '../runtime/create-element.ts'
 import type { Dispatched } from '../runtime/event-types.ts'
@@ -74,11 +83,10 @@ const style = createMixin<TestElement, [style: TestStyle], ElementProps>(
 )
 
 type TestRenderer = {
+  renderer: Renderer<TestNode, TestElement>
   root: RendererRoot
   container: TestElement
   output(): string
-  patches: string[]
-  createdProps: Array<Record<string, unknown>>
   errors: unknown[]
   findElement(type: string): TestElement
 }
@@ -107,20 +115,19 @@ function createTestRenderer(
     eventTargets?: boolean
     getEventTarget?: RendererHost<TestNode, TestElement>['getEventTarget']
     createElement?: RendererHost<TestNode, TestElement>['createElement']
+    commit?: RendererHost<TestNode, TestElement>['commit']
+    persistence?: RendererPersistence<TestNode, TestElement>
+    scheduler?: RendererScheduler<TestNode, TestElement>
   } = {},
 ): TestRenderer {
-  let patches: string[] = []
-  let createdProps: Array<Record<string, unknown>> = []
   let errors: unknown[] = []
   let container = new TestElement('root')
 
   let host: RendererHost<TestNode, TestElement> = {
     createElement(type, props) {
       let element = new TestElement(type)
-      createdProps.push({ ...props })
       for (let name in props) {
-        if (name === 'children') continue
-        if (name === 'mix') throw new Error('mix must never reach the host')
+        if (name === 'children' || name === 'mix' || name === 'key') continue
         if (props[name] !== undefined) element.attrs[name] = props[name]
       }
       return element
@@ -135,11 +142,14 @@ function createTestRenderer(
       if (node.kind === 'element') throw new Error('setText called on an element')
       node.text = text
     },
-    patchProp(element, name, previous, next) {
-      if (name === 'mix') throw new Error('mix must never be patched')
-      patches.push(`${name}:${JSON.stringify(previous)}->${JSON.stringify(next)}`)
-      if (next === undefined) delete element.attrs[name]
-      else element.attrs[name] = next
+    patchProps(element, previous, next) {
+      for (let name in previous) {
+        if (!(name in next) || next[name] === undefined) delete element.attrs[name]
+      }
+      for (let name in next) {
+        if (name === 'children' || name === 'mix' || name === 'key') continue
+        if (next[name] !== undefined) element.attrs[name] = next[name]
+      }
     },
     insert(node, parent, before) {
       detach(node)
@@ -170,8 +180,11 @@ function createTestRenderer(
     host.getEventTarget = options.getEventTarget ?? ((element) => element)
   }
   if (options.createElement) host.createElement = options.createElement
+  if (options.commit) host.commit = options.commit
+  if (options.persistence) host.persistence = options.persistence
 
-  let root = createRenderer(host).createRoot(container)
+  let renderer = createRenderer(host)
+  let root = renderer.createRoot(container, { scheduler: options.scheduler })
   root.addEventListener('error', (event) => {
     event.preventDefault()
     errors.push(event.error)
@@ -190,11 +203,10 @@ function createTestRenderer(
   }
 
   return {
+    renderer,
     root,
     container,
     output: () => container.children.map(serialize).join(''),
-    patches,
-    createdProps,
     errors,
     findElement,
   }
@@ -351,16 +363,6 @@ describe('universal renderer mixins', () => {
   })
 
   describe('props', () => {
-    it('applies composed props and never forwards mix to the host', () => {
-      let { root, output, createdProps } = createTestRenderer()
-
-      root.render(<Box mix={style({ color: 'red' })} label="one" />)
-
-      expect(output()).toBe('<box label="one" style={"color":"red"}></box>')
-      expect(createdProps.at(-1)!.style).toEqual({ color: 'red' })
-      expect('mix' in createdProps.at(-1)!).toBe(false)
-    })
-
     it('lets a later mixin win a shared key and keeps earlier keys', () => {
       let { root, output } = createTestRenderer()
 
@@ -375,22 +377,6 @@ describe('universal renderer mixins', () => {
       root.render(<Box mix={[false, [style({ weight: 'bold' })], null]} />)
 
       expect(output()).toBe('<box style={"weight":"bold"}></box>')
-    })
-
-    it('patches only the props a re-render changed', () => {
-      let { root, output, patches } = createTestRenderer()
-
-      function App(handle: Handle<{ color: string }>) {
-        return () => <Box mix={style({ color: handle.props.color })} label="stable" />
-      }
-
-      root.render(<App color="red" />)
-      expect(patches).toEqual([])
-
-      root.render(<App color="blue" />)
-
-      expect(patches).toEqual(['style:{"color":"red"}->{"color":"blue"}'])
-      expect(output()).toBe('<box label="stable" style={"color":"blue"}></box>')
     })
 
     it('removes composed props when the mixin is removed', () => {
@@ -607,6 +593,140 @@ describe('universal renderer mixins', () => {
         'implement host.getEventTarget',
       )
       expect(output()).toBe('')
+    })
+  })
+
+  describe('shared scheduler', () => {
+    it('publishes an outer render once, after a nested root render completes', () => {
+      let commits: string[] = []
+      let schedulerErrors: unknown[] = []
+      let scheduler = createRendererScheduler<TestNode, TestElement>({
+        reportError(error) {
+          schedulerErrors.push(error)
+        },
+      })
+      let { root, container, renderer } = createTestRenderer({
+        scheduler,
+        commit(target) {
+          commits.push(`${target.type}:${target.children.map(serialize).join('')}`)
+        },
+      })
+      let nestedContainer = new TestElement('nested')
+      let nestedRoot = renderer.createRoot(nestedContainer, { scheduler })
+
+      let insertSnapshots: string[] = []
+      let reporter = createMixin<TestElement, [], ElementProps>((handle) => {
+        handle.addEventListener('insert', () => {
+          insertSnapshots.push(container.children.map(serialize).join(''))
+        })
+      })
+
+      // A portal-style child renders another root through the same scheduler
+      // while the tree it belongs to is still being built.
+      function Portal() {
+        nestedRoot.render(<Box label="portal" />)
+        return () => <Box label="middle" />
+      }
+
+      let taskSnapshots: string[] = []
+      function Outer(handle: Handle) {
+        handle.queueTask(() => {
+          taskSnapshots.push(container.children.map(serialize).join(''))
+        })
+        return () => (
+          <Box label="outer">
+            <Box label="first" mix={reporter()} />
+            <Portal />
+            <Box label="tail" />
+          </Box>
+        )
+      }
+
+      root.render(<Outer />)
+
+      let output =
+        '<box label="outer"><box label="first"></box><box label="middle"></box>' +
+        '<box label="tail"></box></box>'
+      expect(container.children.map(serialize).join('')).toBe(output)
+      expect(commits).toEqual([`root:${output}`, 'nested:<box label="portal"></box>'])
+      expect(insertSnapshots).toEqual([output])
+      expect(taskSnapshots).toEqual([output])
+      expect(schedulerErrors).toEqual([])
+
+      root.unmount()
+      nestedRoot.unmount()
+    })
+
+    it('moves a reclaimed element onto the adopting root scheduler', () => {
+      let persistence = createRendererPersistence<TestNode, TestElement>()
+      let log: string[] = []
+      let releaseTeardown: (() => void) | undefined
+
+      let persisted = createMixin<TestElement, [], ElementProps>((handle) => {
+        handle.addEventListener('insert', () => {
+          log.push('insert')
+        })
+        handle.addEventListener('reclaimed', () => {
+          log.push('reclaimed')
+          handle.queueTask(() => {
+            log.push('task')
+          })
+        })
+        handle.addEventListener('commit', () => {
+          log.push('commit')
+        })
+        handle.addEventListener('beforeRemove', (event) => {
+          event.persistNode(
+            () =>
+              new Promise<void>((resolve) => {
+                releaseTeardown = resolve
+              }),
+          )
+        })
+      })
+
+      let { root, container, renderer, errors, findElement } = createTestRenderer({ persistence })
+      root.render(createElement('box', { key: 'k', mix: persisted(), label: 'first' }))
+      let box = findElement('box')
+      expect(log).toEqual(['insert'])
+
+      // The first root lets the element go and is disposed, but its mixin holds
+      // the removal open, so the node stays for the next root to reclaim.
+      root.render(null)
+      root.unmount()
+      expect(box.parent).toBe(container)
+
+      let update = () => {}
+      function Adopting(handle: Handle) {
+        update = () => {
+          handle.update()
+        }
+        return () => createElement('box', { key: 'k', mix: persisted(), label: 'second' })
+      }
+
+      log.length = 0
+      let adoptingRoot = renderer.createRoot(container)
+      adoptingRoot.addEventListener('error', (event) => {
+        event.preventDefault()
+        errors.push(event.error)
+      })
+      adoptingRoot.render(<Adopting />)
+
+      // Reclaim and the work it queues belong to the batch that adopted the
+      // element, not to the scheduler of the root that released it.
+      expect(log).toEqual(['reclaimed', 'commit', 'task'])
+      expect(findElement('box')).toBe(box)
+      expect(box.attrs.label).toBe('second')
+
+      log.length = 0
+      update()
+      adoptingRoot.flush()
+
+      // Commit-phase lifecycles now ride the adopting root's update batches.
+      expect(log).toEqual(['commit'])
+      expect(errors).toEqual([])
+
+      releaseTeardown?.()
     })
   })
 

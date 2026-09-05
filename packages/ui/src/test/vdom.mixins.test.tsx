@@ -2,6 +2,7 @@ import { expect } from '@remix-run/assert'
 import { describe, it } from '@remix-run/test'
 import { createElement } from '../runtime/create-element.ts'
 import { createRoot } from '../runtime/vdom.ts'
+import { createRendererScheduler } from '../renderer.ts'
 import { createMixin, on, ref } from '../index.ts'
 import { invariant } from '../runtime/invariant.ts'
 import type { Handle, RemixNode } from '../runtime/component.ts'
@@ -687,5 +688,262 @@ describe('vnode mixins', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(removeCalls).toBe(1)
     expect(container.querySelector('#deferred-remove')).toBe(null)
+  })
+
+  it('replaces raw HTML with children when reclaiming an element', () => {
+    let removal = Promise.withResolvers<void>()
+    let persist = createMixin<HTMLDivElement>((handle) => {
+      handle.addEventListener('beforeRemove', (event) => {
+        event.persistNode(() => removal.promise)
+      })
+    })
+    let container = document.createElement('div')
+    let root = createRoot(container)
+    try {
+      root.render(<div key="kept" mix={persist()} innerHTML="<b>old</b>" />)
+      let kept = container.firstElementChild
+      invariant(kept)
+      root.render(null)
+      root.render(
+        <div key="kept" mix={persist()}>
+          <span>new</span>
+        </div>,
+      )
+      expect(container.firstElementChild).toBe(kept)
+      expect(kept.innerHTML).toBe('<span>new</span>')
+    } finally {
+      root.dispose()
+      removal.resolve()
+    }
+  })
+
+  it('releases replaced child lifetimes when reclaiming with raw HTML', () => {
+    let removal = Promise.withResolvers<void>()
+    let persist = createMixin<HTMLDivElement>((handle) => {
+      handle.addEventListener('beforeRemove', (event) => {
+        event.persistNode(() => removal.promise)
+      })
+    })
+    let childSignal: AbortSignal | undefined
+    function Child(handle: Handle) {
+      childSignal = handle.signal
+      return () => <span>child</span>
+    }
+    let container = document.createElement('div')
+    let root = createRoot(container)
+    try {
+      root.render(
+        <div key="kept" mix={persist()}>
+          <Child />
+        </div>,
+      )
+      let kept = container.firstElementChild
+      invariant(kept)
+      invariant(childSignal)
+      root.render(null)
+      expect(childSignal.aborted).toBe(false)
+      root.render(<div key="kept" mix={persist()} innerHTML="<b>raw</b>" />)
+      expect(container.firstElementChild).toBe(kept)
+      expect(kept.innerHTML).toBe('<b>raw</b>')
+      expect(childSignal.aborted).toBe(true)
+    } finally {
+      root.dispose()
+      removal.resolve()
+    }
+  })
+
+  it('cleans up retained nodes when reclaiming their children fails', (t) => {
+    t.mock.method(console, 'error', () => {})
+    let removal = Promise.withResolvers<void>()
+    let failure = new Error('Child render failed')
+    let errors: unknown[] = []
+    let signals: AbortSignal[] = []
+    let fail = false
+    let persist = createMixin<HTMLDivElement>((handle) => {
+      handle.addEventListener('beforeRemove', (event) => {
+        event.persistNode(() => removal.promise)
+      })
+    })
+    function Child(handle: Handle) {
+      signals.push(handle.signal)
+      return () => {
+        if (fail) throw failure
+        return <span>child</span>
+      }
+    }
+    let container = document.createElement('div')
+    let root = createRoot(container)
+    root.addEventListener('error', (event) => errors.push(event.error))
+    try {
+      root.render(
+        <div key="kept" mix={persist()}>
+          <Child />
+        </div>,
+      )
+      root.render(null)
+      expect(container.innerHTML).toBe('<div><span>child</span></div>')
+      expect(signals[0].aborted).toBe(false)
+      fail = true
+      root.render(
+        <div key="kept" mix={persist()}>
+          <Child />
+        </div>,
+      )
+      expect(errors).toEqual([failure])
+      expect(container.innerHTML).toBe('')
+      expect(signals[0].aborted).toBe(true)
+    } finally {
+      root.dispose()
+      removal.resolve()
+    }
+  })
+
+  it('places a reclaimed element where the mount that reclaims it expects it', () => {
+    let releaseRemoval: (() => void) | null = null
+    let persist = createMixin((handle) => {
+      handle.addEventListener('beforeRemove', (event) => {
+        event.persistNode(
+          () =>
+            new Promise<void>((resolve) => {
+              releaseRemoval = () => resolve()
+            }),
+        )
+      })
+      return (props: { id?: string }) => <handle.element {...props} id="kept" />
+    })
+
+    function Pair() {
+      return () => [
+        <div key="kept" mix={[persist()]}>
+          kept
+        </div>,
+        <span>tail</span>,
+      ]
+    }
+
+    let container = document.createElement('div')
+    let root = createRoot(container)
+    root.render(
+      <div key="kept" mix={[persist()]}>
+        kept
+      </div>,
+    )
+    root.flush()
+
+    let kept = container.querySelector('#kept')
+    invariant(kept)
+
+    // Removing the element retains it in place, so it now sits after the node
+    // that replaced it.
+    root.render(<p>other</p>)
+    root.flush()
+    expect(container.innerHTML).toBe('<p>other</p><div id="kept">kept</div>')
+
+    // A fresh subtree mounts into the same parent and reclaims the element:
+    // sibling order in the host has to match the order the tree records.
+    root.render(<Pair />)
+    root.flush()
+
+    expect(container.querySelector('#kept')).toBe(kept)
+    expect(container.innerHTML).toBe('<div id="kept">kept</div><span>tail</span>')
+
+    let release = releaseRemoval ?? (() => {})
+    release()
+  })
+
+  it('runs a mixin-driven update commit after the batch restores host state', async () => {
+    let phases: string[] = []
+    let count = 0
+    let requestUpdate: (() => Promise<AbortSignal>) | undefined
+    let withCount = createMixin<HTMLDivElement>((handle) => {
+      requestUpdate = () => handle.update()
+      handle.addEventListener('beforeUpdate', () => {
+        phases.push('beforeUpdate')
+      })
+      handle.addEventListener('commit', () => {
+        phases.push('commit')
+      })
+      return (props: { ['data-count']?: string }) => (
+        <handle.element {...props} data-count={String(count)} />
+      )
+    })
+
+    let scheduler = createRendererScheduler<Node, Element, ParentNode>({
+      beforeCommit() {
+        phases.push('restore')
+      },
+      reportError(error) {
+        phases.push(`error:${String(error)}`)
+      },
+    })
+    let container = document.createElement('div')
+    let root = createRoot(container, { scheduler })
+    root.render(<div mix={[withCount()]}>content</div>)
+    root.flush()
+
+    let node = container.querySelector('div')
+    invariant(node)
+    expect(node.getAttribute('data-count')).toBe('0')
+
+    phases.length = 0
+    count = 1
+    let pending = requestUpdate!().then((signal) => {
+      phases.push('resolved')
+      return signal
+    })
+    root.flush()
+
+    expect(node.getAttribute('data-count')).toBe('1')
+    // The prop patch is a mutation, and a commit lifecycle reads host state the
+    // batch has already restored.
+    expect(phases).toEqual(['beforeUpdate', 'restore', 'commit'])
+
+    // An awaited update() cannot observe the batch mid-flight.
+    expect((await pending).aborted).toBe(false)
+    expect(phases).toEqual(['beforeUpdate', 'restore', 'commit', 'resolved'])
+  })
+
+  it('dispatches one mixin update lifecycle when the batch also renders the element', async () => {
+    let phases: string[] = []
+    let count = 0
+    let requestUpdate: (() => Promise<AbortSignal>) | undefined
+    let appHandle: Handle<{}> | undefined
+    let withCount = createMixin<HTMLDivElement>((handle) => {
+      requestUpdate = () => handle.update()
+      handle.addEventListener('beforeUpdate', () => {
+        phases.push('beforeUpdate')
+      })
+      handle.addEventListener('commit', () => {
+        phases.push('commit')
+      })
+      return (props: { ['data-count']?: string }) => (
+        <handle.element {...props} data-count={String(count)} />
+      )
+    })
+
+    function App(handle: Handle) {
+      appHandle = handle
+      return () => <div mix={[withCount()]}>content</div>
+    }
+
+    let container = document.createElement('div')
+    let root = createRoot(container)
+    root.render(<App />)
+    root.flush()
+
+    let node = container.querySelector('div')
+    invariant(node)
+
+    phases.length = 0
+    count = 1
+    let pending = requestUpdate!()
+    void appHandle!.update()
+    root.flush()
+
+    expect(node.getAttribute('data-count')).toBe('1')
+    // The scheduler dispatches both phases for every binding it re-rendered, so
+    // a second beforeUpdate would overwrite whatever the first one captured.
+    expect(phases).toEqual(['beforeUpdate', 'commit'])
+    await pending
   })
 })

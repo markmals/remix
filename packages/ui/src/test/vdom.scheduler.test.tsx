@@ -1,6 +1,6 @@
 import { expect } from '@remix-run/assert'
 import { describe, it } from '@remix-run/test'
-import { createRoot } from '../runtime/vdom.ts'
+import { createRoot, createScheduler } from '../runtime/vdom.ts'
 import type { Handle, RemixNode } from '../runtime/component.ts'
 
 describe('vnode rendering', () => {
@@ -85,6 +85,45 @@ describe('vnode rendering', () => {
       capturedUpdate()
       root.flush()
       expect(taskCount).toBe(2)
+    })
+
+    it('keeps a nested root render inside the outer batch', () => {
+      let outerContainer = document.createElement('div')
+      let nestedContainer = document.createElement('div')
+      let scheduler = createScheduler(document, new EventTarget())
+      let outerRoot = createRoot(outerContainer, { scheduler })
+      let nestedRoot = createRoot(nestedContainer, { scheduler })
+
+      // A portal-style child renders another root through the same scheduler
+      // while the tree it belongs to is still being built.
+      function Portal() {
+        nestedRoot.render(<span>portal</span>)
+        return () => <b>middle</b>
+      }
+
+      let snapshots: string[] = []
+      function App(handle: Handle) {
+        handle.queueTask(() => {
+          snapshots.push(`${outerContainer.innerHTML}|${nestedContainer.innerHTML}`)
+        })
+        return () => (
+          <div>
+            <Portal />
+            <i>tail</i>
+          </div>
+        )
+      }
+
+      outerRoot.render(<App />)
+
+      let outerHtml = '<div><b>middle</b><i>tail</i></div>'
+      expect(outerContainer.innerHTML).toBe(outerHtml)
+      expect(nestedContainer.innerHTML).toBe('<span>portal</span>')
+      // Tasks run once, after both trees are in the document.
+      expect(snapshots).toEqual([`${outerHtml}|<span>portal</span>`])
+
+      outerRoot.dispose()
+      nestedRoot.dispose()
     })
   })
 })

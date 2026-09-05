@@ -3,7 +3,7 @@ import { describe, it } from '@remix-run/test'
 import type { Handle } from '../runtime/component.ts'
 import { createRangeRoot } from '../runtime/vdom.ts'
 import { invariant } from '../runtime/invariant.ts'
-import { on } from '../index.ts'
+import { Frame, on } from '../index.ts'
 
 describe('createRangeRoot', () => {
   describe('event forwarding', () => {
@@ -480,6 +480,40 @@ describe('createRangeRoot', () => {
       root.flush()
 
       expect(container.innerHTML).toBe('<!--start--><div>New</div><!--end--><footer>After</footer>')
+    })
+
+    it('does not adopt a frame end outside its hydration range', () => {
+      let container = document.createElement('div')
+      let start = document.createComment('start')
+      let end = document.createComment('end')
+      let footer = document.createElement('footer')
+      footer.textContent = 'Outside the root'
+      let outerFrameEnd = document.createComment('/rmx:f')
+      container.append(
+        start,
+        document.createComment('rmx:f:incomplete'),
+        end,
+        footer,
+        outerFrameEnd,
+      )
+      let root = createRangeRoot([start, end], {
+        frameInit: {
+          async resolveFrame() {
+            return ''
+          },
+        },
+      })
+
+      try {
+        root.render(<Frame src="/child" />)
+        root.dispose()
+        expect(end.parentNode).toBe(container)
+        expect(footer.parentNode).toBe(container)
+        expect(footer.textContent).toBe('Outside the root')
+        expect(outerFrameEnd.parentNode).toBe(container)
+      } finally {
+        root.dispose()
+      }
     })
 
     it('handles empty ranges with content after end marker', () => {

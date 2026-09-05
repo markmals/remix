@@ -2,12 +2,12 @@ import { Fragment } from './component.ts'
 import { Frame } from './component.ts'
 import { invariant } from './invariant.ts'
 import { isEmptyChild, isPrimitiveChild, isRemixNode, normalizeChildren } from './core/children.ts'
+import { isRemixElement } from './core/vnode.ts'
 import type { RemixNode } from './jsx.ts'
 import type { ElementFunction } from './element-function.ts'
 import type { FrameProps } from './component.ts'
 import { isMixinDescriptor } from './mixins/mixin.ts'
 import {
-  isRemixElement,
   NON_RENDER_NODE,
   TEXT_NODE,
   type RuntimeElementProps,

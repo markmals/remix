@@ -52,9 +52,16 @@ export interface UpdateScheduler<target extends object, parent extends object> {
   /**
    * Runs caller-initiated reconciliation inside a batch. The batch always
    * drains, even when `work` throws, and the error is rethrown afterwards.
+   *
+   * A render started while another render is still on the stack — a second
+   * root rendered from a component of the first, on a shared scheduler — joins
+   * the outer batch instead of draining a half-built tree.
    */
   runSync(work: EmptyFn): void
-  /** Drains scheduled updates, the commit, and queued tasks immediately. */
+  /**
+   * Drains scheduled updates, the commit, and queued tasks immediately. Does
+   * nothing while a render or another drain owns the batch.
+   */
   flush(): void
 }
 
@@ -70,6 +77,12 @@ export interface UpdateSchedulerConfig<target extends object, parent extends obj
   hasScheduledAncestor(target: target, batch: ReadonlyMap<target, parent>): boolean
   /** Names a target for diagnostics. */
   describe(target: target): string
+  /** Receives non-fatal diagnostics for unusually many updates in one turn. */
+  reportWarning?(message: string): void
+  /** Captures host state before this batch's first mutation. */
+  beforeUpdate?(): void
+  /** Restores host state before commit-phase lifecycle callbacks. */
+  beforeCommit?(): void
   /** Publishes the mutations made in this batch. */
   commit(): void
   /** Surfaces an error that cannot be thrown to a caller. */
@@ -98,12 +111,36 @@ export function createUpdateScheduler<target extends object, parent extends obje
   let tasks: EmptyFn[] = []
   let flushScheduled = false
   let flushing = false
+  let syncRenderDepth = 0
   let mutated = false
+  let batchStarted = false
   let updateCounts = new WeakMap<target, number>()
   let resetScheduled = false
+  let cascadingUpdateCount = 0
+  let cascadingNames = config.reportWarning ? new Map<string, number>() : undefined
   let phaseEvents = new EventTarget()
   let phaseListenerCounts: Record<SchedulerPhaseType, number> = { beforeUpdate: 0, commit: 0 }
   let activeParents: readonly parent[] = NO_PARENTS
+
+  function beginBatch(): void {
+    if (batchStarted) return
+    batchStarted = true
+    try {
+      config.beforeUpdate?.()
+    } catch (error) {
+      config.reportError(error)
+    }
+  }
+
+  function finishMutationPhase(): void {
+    if (!batchStarted) return
+    batchStarted = false
+    try {
+      config.beforeCommit?.()
+    } catch (error) {
+      config.reportError(error)
+    }
+  }
 
   function scheduleFlush(): void {
     if (flushScheduled || flushing) return
@@ -114,6 +151,17 @@ export function createUpdateScheduler<target extends object, parent extends obje
   function withinUpdateBudget(entry: target): boolean {
     let count = (updateCounts.get(entry) ?? 0) + 1
     updateCounts.set(entry, count)
+    if (cascadingNames) {
+      let name = config.describe(entry)
+      cascadingNames.set(name, (cascadingNames.get(name) ?? 0) + 1)
+      cascadingUpdateCount++
+      if (cascadingUpdateCount === MAX_CASCADING_UPDATES) {
+        let names = Array.from(cascadingNames, ([name, count]) => `${name} x${count}`).join(', ')
+        config.reportWarning?.(
+          `${cascadingUpdateCount} cascading component updates detected in one event loop turn. Components: ${names}`,
+        )
+      }
+    }
 
     if (!resetScheduled) {
       resetScheduled = true
@@ -122,6 +170,8 @@ export function createUpdateScheduler<target extends object, parent extends obje
       setTimeout(() => {
         updateCounts = new WeakMap()
         resetScheduled = false
+        cascadingUpdateCount = 0
+        cascadingNames?.clear()
       }, 0)
     }
 
@@ -207,12 +257,17 @@ export function createUpdateScheduler<target extends object, parent extends obje
   }
 
   function flush(): void {
-    if (flushing) return
+    // A render still on the stack owns this batch: draining it would dispatch
+    // commit-phase lifecycles for a half-mounted subtree, publish a partial
+    // tree, and run tasks the render has not produced its result for yet. The
+    // `runSync` that started the outermost render drains once it returns.
+    if (flushing || syncRenderDepth > 0) return
     flushing = true
     try {
       while (true) {
         flushScheduled = false
         if (!pending() && !mutated) return
+        beginBatch()
 
         let parents: readonly parent[] =
           scheduled.size > 0 ? Array.from(new Set(scheduled.values())) : NO_PARENTS
@@ -225,6 +280,7 @@ export function createUpdateScheduler<target extends object, parent extends obje
         // Work that runs from here on is not part of the update pass, so a
         // mixin lifecycle it triggers dispatches inline again.
         activeParents = NO_PARENTS
+        finishMutationPhase()
         if (runQueue(commitPhase)) mutated = true
 
         if (mutated) {
@@ -258,6 +314,7 @@ export function createUpdateScheduler<target extends object, parent extends obje
         return
       }
     } finally {
+      finishMutationPhase()
       activeParents = NO_PARENTS
       flushing = false
     }
@@ -311,11 +368,17 @@ export function createUpdateScheduler<target extends object, parent extends obje
 
     runSync(render: EmptyFn): void {
       mutated = true
+      beginBatch()
       let failure: { error: unknown } | undefined
+      // Nested renders share the batch: only the outermost one drains it, so
+      // its own mutations are part of the commit the caller observes.
+      syncRenderDepth++
       try {
         render()
       } catch (error) {
         failure = { error }
+      } finally {
+        syncRenderDepth--
       }
       flush()
       if (failure) throw failure.error

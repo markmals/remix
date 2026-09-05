@@ -1,7 +1,7 @@
 import { createInput, createTerm, type InputEvent, type Op, type ScanResult } from '@bomb.sh/tty'
 import { TypedEventTarget } from '@remix-run/ui'
-import type { ComponentErrorEvent, RemixNode } from '@remix-run/ui'
-import { createRenderer } from '@remix-run/ui/renderer'
+import type { RemixNode } from '@remix-run/ui'
+import { createRenderer, type RendererErrorEvent } from '@remix-run/ui/renderer'
 
 import { TerminalRenderError } from './error.ts'
 import {
@@ -73,7 +73,7 @@ export interface TerminalRootEventMap {
    * `preventDefault()` to mark it handled; otherwise it is rethrown so the
    * platform's uncaught handler sees it.
    */
-  error: ComponentErrorEvent
+  error: RendererErrorEvent
 }
 
 /**
@@ -174,9 +174,8 @@ export async function createRoot(options: TerminalRootOptions): Promise<Terminal
   root.addEventListener(
     'error',
     (event) => {
-      let forwarded: ComponentErrorEvent = new ErrorEvent('error', {
+      let forwarded = Object.assign(new Event('error', { cancelable: true }), {
         error: event.error,
-        cancelable: true,
       })
       // Cancelling ours means a listener took responsibility, so the
       // universal root must not rethrow it as well.
@@ -237,7 +236,7 @@ export async function createRoot(options: TerminalRootOptions): Promise<Terminal
   }
 
   function fail(error: unknown): void {
-    let event: ComponentErrorEvent = new ErrorEvent('error', { error, cancelable: true })
+    let event = Object.assign(new Event('error', { cancelable: true }), { error })
     if (target.dispatchEvent(event)) {
       // Unhandled. Logging would corrupt the screen the app is drawing to, so
       // hand it to the platform's uncaught handler instead.

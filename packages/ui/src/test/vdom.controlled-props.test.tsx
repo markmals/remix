@@ -1,8 +1,8 @@
 import { expect } from '@remix-run/assert'
 import { describe, it } from '@remix-run/test'
 import type { Handle } from '../runtime/component.ts'
-import { createRoot } from '../runtime/vdom.ts'
-import { on } from '../index.ts'
+import { createRoot, type VirtualRoot } from '../runtime/vdom.ts'
+import { createMixin, on } from '../index.ts'
 
 // Synthetic per-character `type` against an <input>. Mirrors what a real
 // browser fires: keydown -> beforeinput -> input -> keyup, mutating the value
@@ -51,6 +51,89 @@ describe('vdom controlled props', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(input.value).toBe('hello')
+  })
+
+  it('releases controlled value ownership when another root reclaims the input', async () => {
+    let removal = Promise.withResolvers<void>()
+    let persist = createMixin<HTMLInputElement>((handle) => {
+      handle.addEventListener('beforeRemove', (event) => {
+        event.persistNode(() => removal.promise)
+      })
+    })
+    let container = document.createElement('div')
+    let first = createRoot(container)
+    let second: VirtualRoot | undefined
+
+    try {
+      first.render(<input key="field" value="controlled" mix={persist()} />)
+      let input = container.querySelector('input')
+      if (!input) throw new Error('Expected an input')
+      first.dispose()
+
+      second = createRoot(container)
+      second.render(<input key="field" mix={persist()} />)
+      expect(container.querySelector('input')).toBe(input)
+
+      input.value = 'editable'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      await Promise.resolve()
+      expect(input.value).toBe('editable')
+    } finally {
+      first.dispose()
+      second?.dispose()
+      removal.resolve()
+    }
+  })
+
+  it('resolves a controlled select value against reclaimed children', () => {
+    let releaseRemoval: (() => void) | null = null
+    let persist = createMixin<HTMLSelectElement>((handle) => {
+      handle.addEventListener('beforeRemove', (event) => {
+        event.persistNode(
+          () =>
+            new Promise<void>((resolve) => {
+              releaseRemoval = () => resolve()
+            }),
+        )
+      })
+    })
+    let container = document.createElement('div')
+    let root = createRoot(container)
+
+    try {
+      root.render(
+        <select key="picker" value="a" mix={persist()}>
+          <option value="a">A</option>
+          <option value="b">B</option>
+        </select>,
+      )
+      root.flush()
+
+      let select = container.querySelector('select')
+      if (!select) throw new Error('Expected a select')
+      expect(select.value).toBe('a')
+
+      root.render(null)
+      root.flush()
+      expect(container.querySelector('select')).toBe(select)
+
+      // The value prop can only select an option that exists, so reclaim has to
+      // diff the retained children before it applies props and finalizes.
+      root.render(
+        <select key="picker" value="d" mix={persist()}>
+          <option value="c">C</option>
+          <option value="d">D</option>
+        </select>,
+      )
+      root.flush()
+
+      expect(container.querySelector('select')).toBe(select)
+      expect(select.value).toBe('d')
+    } finally {
+      let release = releaseRemoval ?? (() => {})
+      release()
+      root.dispose()
+    }
   })
 
   it('restores controlled checked on native change when no update happens', async () => {
@@ -221,6 +304,32 @@ describe('vdom controlled props', () => {
     await Promise.resolve()
     expect(text.value).toBe('user typed')
     expect(check.checked).toBe(true)
+  })
+
+  it('reflects a controlled select value after mounting and replacing options', () => {
+    let container = document.createElement('div')
+    let root = createRoot(container)
+    try {
+      root.render(
+        <select value="b">
+          <option value="a">A</option>
+          <option value="b">B</option>
+        </select>,
+      )
+      let select = container.querySelector('select')
+      if (!select) throw new Error('Expected a select')
+      expect(select.value).toBe('b')
+
+      root.render(
+        <select value="b">
+          <option value="b">B</option>
+          <option value="a">A</option>
+        </select>,
+      )
+      expect(select.value).toBe('b')
+    } finally {
+      root.dispose()
+    }
   })
 
   it('restores controlled value on native change for select when no update happens', async () => {

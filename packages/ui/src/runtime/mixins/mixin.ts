@@ -202,6 +202,7 @@ type AnyMixinSetupResult = ReturnType<AnyMixinType> | AnyMixinRunnerResult
 type AnyMixinHandle = MixinHandle<EventTarget, ElementProps>
 type ScopedAnyMixinHandle = AnyMixinHandle & {
   queueCommitTask(task: () => void): void
+  setScheduler(scheduler: MixinScheduler): void
   setActiveScope(scope?: symbol): void
   dispatchScopedEvent(scope: symbol, event: Event): void
   releaseScope(scope: symbol): void
@@ -371,6 +372,11 @@ export function resolveMixedProps(input: ResolveMixedPropsInput): ResolveMixedPr
       getBinding: () => state.binding,
     }) as ScopedAnyMixinHandle
     state.handle = handle
+  } else {
+    // A retained state can be reclaimed by a root that batches on its own
+    // scheduler. The work this resolve queues — removed and added runners —
+    // belongs to the batch that is adopting the element.
+    handle.setScheduler(input.scheduler)
   }
   let hostType = input.hostType
   let descriptors = resolveMixDescriptors(input.props)
@@ -490,9 +496,12 @@ export function bindMixinRuntime<
   let previousNode = state.binding?.node
   let nextBinding = binding
   state.binding = nextBinding
+  let handle = state.handle as ScopedAnyMixinHandle | undefined
+  // The binding names the root that renders this element, so its scheduler
+  // owns the handle's queued work and phase subscriptions from here on.
+  if (handle && nextBinding) handle.setScheduler(nextBinding.scheduler)
   if (!nextBinding?.node || previousNode === nextBinding.node) return
   let nextNode = nextBinding.node
-  let handle = state.handle as ScopedAnyMixinHandle | undefined
   if (!handle) return
   for (let entry of state.runners) {
     if (options?.dispatchReclaimed) {
@@ -564,6 +573,9 @@ class MixinHandleImpl
   frame: FrameHandle
   element: MixinElement<EventTarget, ElementProps>
   #options: MixinHandleFactoryOptions
+  // The root that renders the element owns its batching, and a retained
+  // element can be reclaimed by a root with a different scheduler.
+  #scheduler: MixinScheduler
   #phaseListenerCounts: Record<'beforeUpdate' | 'commit', number> = {
     beforeUpdate: 0,
     commit: 0,
@@ -582,6 +594,7 @@ class MixinHandleImpl
   constructor(options: MixinHandleFactoryOptions) {
     super()
     this.#options = options
+    this.#scheduler = options.scheduler
     this.id = options.id
     this.context = {
       get: options.getContext,
@@ -628,9 +641,9 @@ class MixinHandleImpl
     this.#phaseListenerCounts[type] += 1
     if (this.#phaseListenerCounts[type] !== 1) return
     if (type === 'beforeUpdate') {
-      this.#options.scheduler.addEventListener('beforeUpdate', this.#onSchedulerBeforeUpdate)
+      this.#scheduler.addEventListener('beforeUpdate', this.#onSchedulerBeforeUpdate)
     } else {
-      this.#options.scheduler.addEventListener('commit', this.#onSchedulerCommit)
+      this.#scheduler.addEventListener('commit', this.#onSchedulerCommit)
     }
   }
 
@@ -654,9 +667,9 @@ class MixinHandleImpl
     this.#phaseListenerCounts[type] = Math.max(0, this.#phaseListenerCounts[type] - 1)
     if (this.#phaseListenerCounts[type] !== 0) return
     if (type === 'beforeUpdate') {
-      this.#options.scheduler.removeEventListener('beforeUpdate', this.#onSchedulerBeforeUpdate)
+      this.#scheduler.removeEventListener('beforeUpdate', this.#onSchedulerBeforeUpdate)
     } else {
-      this.#options.scheduler.removeEventListener('commit', this.#onSchedulerCommit)
+      this.#scheduler.removeEventListener('commit', this.#onSchedulerCommit)
     }
   }
 
@@ -677,7 +690,7 @@ class MixinHandleImpl
   }
 
   queueTask(task: (node: EventTarget, signal: AbortSignal) => void): void {
-    this.#options.scheduler.enqueueTasks([
+    this.#scheduler.enqueueTasks([
       () => {
         let binding = this.#options.getBinding()
         invariant(binding)
@@ -687,7 +700,22 @@ class MixinHandleImpl
   }
 
   queueCommitTask(task: () => void): void {
-    this.#options.scheduler.enqueueCommitPhase([task])
+    this.#scheduler.enqueueCommitPhase([task])
+  }
+
+  setScheduler(scheduler: MixinScheduler): void {
+    if (scheduler === this.#scheduler) return
+    // Phase subscriptions move with the handle: the scheduler it leaves keeps
+    // neither a reference to it nor a say over its lifecycles.
+    if (this.#phaseListenerCounts.beforeUpdate > 0) {
+      this.#scheduler.removeEventListener('beforeUpdate', this.#onSchedulerBeforeUpdate)
+      scheduler.addEventListener('beforeUpdate', this.#onSchedulerBeforeUpdate)
+    }
+    if (this.#phaseListenerCounts.commit > 0) {
+      this.#scheduler.removeEventListener('commit', this.#onSchedulerCommit)
+      scheduler.addEventListener('commit', this.#onSchedulerCommit)
+    }
+    this.#scheduler = scheduler
   }
 
   setActiveScope(scope?: symbol): void {
@@ -756,9 +784,9 @@ class MixinHandleImpl
     this.#phaseListenerCounts[type] = Math.max(0, this.#phaseListenerCounts[type] - amount)
     if (this.#phaseListenerCounts[type] !== 0) return
     if (type === 'beforeUpdate') {
-      this.#options.scheduler.removeEventListener('beforeUpdate', this.#onSchedulerBeforeUpdate)
+      this.#scheduler.removeEventListener('beforeUpdate', this.#onSchedulerBeforeUpdate)
     } else {
-      this.#options.scheduler.removeEventListener('commit', this.#onSchedulerCommit)
+      this.#scheduler.removeEventListener('commit', this.#onSchedulerCommit)
     }
   }
 }

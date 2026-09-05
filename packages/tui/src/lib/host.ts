@@ -248,8 +248,13 @@ export function createTerminalHost(
       node.value = text
     },
 
-    patchProp(element, name, _previous, next) {
-      setProp(element, name, next)
+    patchProps(element, previous, next) {
+      for (let name in previous) {
+        if (!(name in next)) setProp(element, name, undefined)
+      }
+      for (let name in next) {
+        if (previous[name] !== next[name]) setProp(element, name, next[name])
+      }
     },
 
     insert(node, parent, before) {
@@ -304,7 +309,7 @@ function detach(node: TerminalNode): void {
 }
 
 function setProp(element: TerminalElement, name: string, value: unknown): void {
-  if (name === 'children') return
+  if (name === 'children' || name === 'mix' || name === 'key') return
 
   if (name === 'style') {
     if (element.type === BOX) {

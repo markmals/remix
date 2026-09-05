@@ -135,6 +135,8 @@ The output is an ephemeral WASM memory view. Consume or copy it before `write` r
 
 Reconciliation errors from `render()` throw synchronously. Scheduled component errors, queued-task errors, and paint/commit errors emit a cancelable `error` event. On the zero-I/O root, call `event.preventDefault()` when handling `event.error`; otherwise it is rethrown asynchronously. The Node runner treats these errors as fatal: it restores the terminal and rejects `closed`, even if an application listener also calls `preventDefault()`. tty errors use `TerminalRenderError`, whose `type` identifies the failure.
 
+Error events use the portable `RendererErrorEvent` shape from `remix/ui/renderer`: a standard `Event` carrying the original thrown value in `event.error`. No browser `ErrorEvent` global is required.
+
 Reconciliation does not roll back host mutations after a failure. For clean recovery on a zero-I/O root, unmount it and create a replacement root.
 
 This experiment does not implement DOM elements, CSS, DOM-dependent mixins, `innerHTML`, hydration, frames, or navigation. `Box` and `Text` are terminal-specific; `style()` and `on()` use the shared Remix mixin lifecycle. tty 0.9.0 does not expose a scroll-update API: wheel events are forwarded as input, but this package does not implement scrolling or a focus/widget system. Hover depends on the terminal sending mouse-motion reports.

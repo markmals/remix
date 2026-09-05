@@ -22,8 +22,6 @@ type TestRenderer = {
   output(): string
   /** Snapshot of the tree at each commit, newest last. */
   commits: string[]
-  /** `name:previous->next` for every patched prop, in order. */
-  patches: string[]
   errors: unknown[]
 }
 
@@ -47,9 +45,13 @@ function detach(node: TestNode): void {
 }
 
 // Strict insertion exposes invalid renderer anchors instead of silently appending.
-function createTestRenderer(options: { onCommit?: (output: string) => void } = {}): TestRenderer {
+function createTestRenderer(
+  options: {
+    onCommit?: (output: string) => void
+    shouldRemountComponent?: () => boolean
+  } = {},
+): TestRenderer {
   let commits: string[] = []
-  let patches: string[] = []
   let errors: unknown[] = []
   let container: TestElement = {
     kind: 'element',
@@ -63,8 +65,7 @@ function createTestRenderer(options: { onCommit?: (output: string) => void } = {
     createElement(type, props) {
       let attrs: Record<string, unknown> = {}
       for (let name in props) {
-        if (name === 'children') continue
-        if (name === 'key') throw new Error('key must never reach the host')
+        if (name === 'children' || name === 'mix' || name === 'key') continue
         attrs[name] = props[name]
       }
       return { kind: 'element', type, attrs, children: [], parent: null }
@@ -79,13 +80,14 @@ function createTestRenderer(options: { onCommit?: (output: string) => void } = {
       if (node.kind === 'element') throw new Error('setText called on an element')
       node.text = text
     },
-    patchProp(element, name, previous, next) {
-      if (name === 'children' || name === 'key') {
-        throw new Error(`${name} must never be patched`)
+    patchProps(element, previous, next) {
+      for (let name in previous) {
+        if (!(name in next) || next[name] === undefined) delete element.attrs[name]
       }
-      patches.push(`${name}:${String(previous)}->${String(next)}`)
-      if (next === undefined) delete element.attrs[name]
-      else element.attrs[name] = next
+      for (let name in next) {
+        if (name === 'children' || name === 'mix' || name === 'key') continue
+        if (next[name] !== undefined) element.attrs[name] = next[name]
+      }
     },
     insert(node, parent, before) {
       detach(node)
@@ -117,7 +119,9 @@ function createTestRenderer(options: { onCommit?: (output: string) => void } = {
     },
   }
 
-  let root = createRenderer(host).createRoot(container)
+  let root = createRenderer(host).createRoot(container, {
+    shouldRemountComponent: options.shouldRemountComponent,
+  })
   root.addEventListener('error', (event) => {
     event.preventDefault()
     errors.push(event.error)
@@ -128,7 +132,6 @@ function createTestRenderer(options: { onCommit?: (output: string) => void } = {
     container,
     output: () => container.children.map(serialize).join(''),
     commits,
-    patches,
     errors,
   }
 }
@@ -149,19 +152,6 @@ describe('createRenderer', () => {
       )
 
       expect(output()).toBe('<div>a1bc</div>')
-    })
-
-    it('patches changed props and removes props that are gone', () => {
-      let { root, output, patches } = createTestRenderer()
-
-      root.render(<div id="a" title="first" />)
-      expect(output()).toBe('<div id="a" title="first"></div>')
-      expect(patches).toEqual([])
-
-      root.render(<div id="b" />)
-
-      expect(output()).toBe('<div id="b"></div>')
-      expect(patches).toEqual(['title:first->undefined', 'id:a->b'])
     })
 
     it('reuses the host element and text node across updates', () => {
@@ -652,15 +642,19 @@ describe('createRenderer', () => {
       expect(output()).toBe('')
     })
 
-    it('unmount is idempotent and render afterwards throws', () => {
+    it('keeps an unmounted root closed across repeated unmounts', () => {
       let { root, output } = createTestRenderer()
-
-      root.render(<div>content</div>)
+      let setups = 0
+      function App() {
+        setups++
+        return () => <span>mounted</span>
+      }
+      root.render(<App />)
       root.unmount()
       root.unmount()
-
+      expect(() => root.render(<App />)).toThrow()
+      expect(setups).toBe(1)
       expect(output()).toBe('')
-      expect(() => root.render(<div>again</div>)).toThrow('unmounted renderer root')
     })
 
     it('rejects frames and DOM mixins instead of rendering nothing', () => {
@@ -705,6 +699,119 @@ describe('createRenderer', () => {
 
       expect(output()).toBe('<div><span>a</span></div>')
       expect(mountedSignal!.aborted).toBe(true)
+    })
+
+    it('owns child lifetimes after a host update rejects its props', async () => {
+      let { root, output } = createTestRenderer()
+      let childHandle: Handle<{}> | undefined
+      let leafSignal: AbortSignal | undefined
+      let showLeaf = false
+      function Leaf(handle: Handle) {
+        leafSignal = handle.signal
+        return () => <i>leaf</i>
+      }
+      function Child(handle: Handle) {
+        childHandle = handle
+        return () => [<span>child</span>, showLeaf ? <Leaf /> : null]
+      }
+      root.render(
+        <div>
+          <Child />
+        </div>,
+      )
+      expect(() =>
+        root.render(
+          <div mix={on('click', () => {})}>
+            <Child />
+          </div>,
+        ),
+      ).toThrow('Mixins are not supported')
+
+      showLeaf = true
+      await childHandle!.update()
+      expect(output()).toBe('<div><span>child</span><i>leaf</i></div>')
+      expect(leafSignal!.aborted).toBe(false)
+      root.unmount()
+      expect(leafSignal!.aborted).toBe(true)
+      expect(output()).toBe('')
+    })
+
+    it('keeps siblings diffed before a failed child owned by the live tree', async () => {
+      let { root, errors, output } = createTestRenderer()
+      let goodHandle: Handle<{}> | undefined
+      let parentHandle: Handle<{}> | undefined
+      let failBad = false
+      let showTail = false
+
+      function Good(handle: Handle) {
+        goodHandle = handle
+        return () => [<span>head</span>, showTail ? <i>tail</i> : null]
+      }
+
+      function Bad() {
+        return () => {
+          if (failBad) throw new Error('bad exploded')
+          return <b>bad</b>
+        }
+      }
+
+      function Parent(handle: Handle) {
+        parentHandle = handle
+        return () => [<Good />, <Bad />]
+      }
+
+      root.render(<Parent />)
+      expect(output()).toBe('<span>head</span><b>bad</b>')
+
+      failBad = true
+      await parentHandle!.update()
+      expect(errors).toHaveLength(1)
+
+      // Good diffed before Bad threw, so the live tree owns what that diff
+      // produced: its own update has to resolve anchors against its real
+      // siblings, and an unmount has to reach the nodes it mounted since.
+      showTail = true
+      await goodHandle!.update()
+      expect(output()).toBe('<span>head</span><i>tail</i><b>bad</b>')
+
+      root.unmount()
+      expect(output()).toBe('')
+    })
+
+    it('keeps a forced remount reachable when a later child throws', () => {
+      let cardSignals: AbortSignal[] = []
+      let remount = false
+      let { root, output } = createTestRenderer({
+        // Stands in for hot module replacement: the mounted implementation is
+        // stale, so a matching child remounts instead of updating.
+        shouldRemountComponent: () => remount,
+      })
+
+      function Card(handle: Handle) {
+        cardSignals.push(handle.signal)
+        return () => <span>card</span>
+      }
+
+      function Bad(): never {
+        throw new Error('bad exploded')
+      }
+
+      root.render([<Card />])
+      expect(output()).toBe('<span>card</span>')
+
+      remount = true
+      expect(() => root.render([<Card />, <Bad />])).toThrow('bad exploded')
+
+      // The remounted card replaced the node the previous tree pointed at, so
+      // the live tree has to own it: its position, and its lifetime.
+      expect(cardSignals).toHaveLength(2)
+      expect(cardSignals[0]!.aborted).toBe(true)
+      expect(cardSignals[1]!.aborted).toBe(false)
+      expect(output()).toBe('<span>card</span>')
+
+      root.unmount()
+      expect(output()).toBe('')
+      expect(cardSignals[1]!.aborted).toBe(true)
     })
 
     it('keeps a component updatable after an ancestor re-render failed its render', async () => {
